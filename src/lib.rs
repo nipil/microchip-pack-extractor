@@ -2,14 +2,16 @@ use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::fs;
 
+const BASE_URL: &str = "https://packs.download.microchip.com";
+
 const INDEX_NAME: &str = "index.idx";
 
-pub async fn get(base_url: &str, client: &reqwest::Client) -> Idx {
+pub async fn get(client: &reqwest::Client) -> Idx {
     fn parse_index(xml: &str) -> Idx {
         from_str(&xml).expect("Index XML should parse correctly")
     }
 
-    let url = format!("{base_url}/{INDEX_NAME}");
+    let url = format!("{BASE_URL}/{INDEX_NAME}");
 
     // latest etag
     eprintln!("Fetching index header...");
@@ -32,6 +34,8 @@ pub async fn get(base_url: &str, client: &reqwest::Client) -> Idx {
     if let Ok(content) = fs::read_to_string(&cache) {
         eprintln!("Reusing content from cache {cache}");
         return parse_index(&content);
+    } else {
+        eprintln!("No available cache {cache}");
     }
 
     // get latest content
