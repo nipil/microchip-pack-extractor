@@ -1,0 +1,3 @@
+[build]
+target-dir = "/tmp/cargo-target" # path of where to place generated artifacts
+build-dir = "/tmp/cargo-build"   # path of where to place intermediate build artifacts
