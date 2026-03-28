@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.102"
+quoted-string = "0.6.1"
 reqwest = "0.13.2"
 tokio = { version = "1.50.0", features = ["full"]}
