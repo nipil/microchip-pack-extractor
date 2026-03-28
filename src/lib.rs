@@ -4,6 +4,7 @@ use serde_xml_rs;
 use std::fs;
 use tokio::task::JoinHandle;
 
+const CACHE_DIR: &str = "cache";
 const BASE_URL: &str = "https://packs.download.microchip.com";
 const INDEX_NAME: &str = "index.idx";
 
@@ -43,15 +44,23 @@ fn get_etag_from_response(res: &reqwest::Response) -> &str {
 async fn get_cached_url_content_by_etag(
     client: &reqwest::Client,
     url: &str,
-    cache_file: &str,
+    file_name: &str,
 ) -> Vec<u8> {
     // detect newest version using ETag
     let res = head_url(client, url).await;
     let etag = get_etag_from_response(&res);
     debug!(url=url, etag=etag; "Lookup most recent etag for url");
 
+    // ensure the cache folder exists
+    debug!(cache=CACHE_DIR; "Ensuring cache folder exists");
+    fs::DirBuilder::new()
+        .recursive(true)
+        .create(CACHE_DIR)
+        .expect("Cache directory should exist");
+
     // return local cache if any is available
-    let cache_file = format!("{etag}.{cache_file}");
+    let cache_file = format!("{CACHE_DIR}/{etag}.{file_name}");
+    trace!(cache=cache_file.as_str(); "Cache path");
     if let Ok(content) = fs::read(&cache_file) {
         debug!(cache=cache_file.as_str(), size=content.len(); "Reading cache");
         return content;
@@ -65,7 +74,7 @@ async fn get_cached_url_content_by_etag(
     let content = Vec::from(content);
 
     // save content to cache (TOC/TOU: ETag might changed inbetween)
-    let cache_file = format!("{etag}.{cache_file}");
+    let cache_file = format!("{CACHE_DIR}/{etag}.{file_name}");
     debug!(cache=cache_file.as_str(), size=content.len(); "Writing cache");
     fs::write(cache_file, &content).expect("Writing to cache must not fail");
 

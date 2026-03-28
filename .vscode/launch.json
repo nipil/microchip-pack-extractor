@@ -15,7 +15,7 @@
                 ]
             },
             "env": {
-                "RUST_LOG": "microchip_pack_extractor=trace"
+                "RUST_LOG": "microchip_pack_extractor=info"
             },
             "args": []
         }
