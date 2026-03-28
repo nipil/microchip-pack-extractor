@@ -4,11 +4,9 @@ use std::fs;
 
 const INDEX_NAME: &str = "index.idx";
 
-pub async fn get(base_url: &str, client: &reqwest::Client) -> Index {
-    fn parse_index(xml: &str) -> Index {
-        let index: Index = from_str(&xml).expect("Index XML should parse correctly");
-        eprintln!("Index has {} PDSC", index.pdscs.len());
-        index
+pub async fn get(base_url: &str, client: &reqwest::Client) -> Idx {
+    fn parse_index(xml: &str) -> Idx {
+        from_str(&xml).expect("Index XML should parse correctly")
     }
 
     let url = format!("{base_url}/{INDEX_NAME}");
@@ -61,68 +59,35 @@ pub async fn get(base_url: &str, client: &reqwest::Client) -> Index {
     parse_index(&content)
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename = "idx")]
-pub struct Index {
+#[derive(Deserialize)]
+pub struct Idx {
     #[serde(rename = "pdsc")]
     pdscs: Vec<Pdsc>,
 }
 
-#[derive(Debug, Deserialize)]
-struct Pdsc {
-    #[serde(rename = "@url")]
-    url: String,
+impl Idx {
+    pub fn dpf_pdsc(&self) -> Vec<&Pdsc> {
+        self.pdscs
+            .iter()
+            .filter(|x| x.name.ends_with("_DFP.pdsc"))
+            .collect()
+    }
+}
+
+#[derive(Deserialize)]
+pub struct Pdsc {
     #[serde(rename = "@name")]
     name: String,
     #[serde(rename = "@version")]
-    version: String, // FIXME: semver ?
-    #[serde(rename = "@atmel:name")]
-    atmel_name: String,
-    #[serde(rename = "@atmel:name.gz")]
-    atmel_name_gz: String,
-    #[serde(rename = "atmel:releases")]
-    atmel_releases: AtmelReleases,
-    #[serde(default, rename = "atmel:devices")]
-    atmel_devices: Option<AtmelDevices>,
+    version: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct AtmelReleases {
-    #[serde(rename = "atmel:release")]
-    atmel_release: Vec<AtmelRelease>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AtmelRelease {
-    #[serde(rename = "@version")]
-    version: String, // FIXME: semver
-    #[serde(rename = "@date")]
-    date: String, // FIXME: date
-    #[serde(rename = "atmel:devices")]
-    atmel_devices: AtmelDevices,
-    // TODO: atmel:description
-    // TODO: atmel:keywords
-    // TODO: atmel:conditions
-    // TODO: atmel:components
-}
-
-#[derive(Debug, Deserialize)]
-struct AtmelDevices {
-    #[serde(default, rename = "atmel:device")]
-    atmel_device: Vec<AtmelDevice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AtmelDevice {
-    #[serde(rename = "@name")]
-    name: String,
-    #[serde(rename = "@family")]
-    family: String,
-    #[serde(rename = "@core")]
-    core: Option<String>,
-    #[serde(rename = "@endian")]
-    endian: Option<String>,
-    // TODO: atmel:book
-    // TODO: atmel:prerequisite
-    // TODO: atmel:toolchain
+impl Pdsc {
+    pub fn atpack_name(&self) -> String {
+        let name = self
+            .name
+            .strip_suffix(".pdsc")
+            .expect("PDSC name must end with .pdsc");
+        format!("{}.{}.atpack", name, self.version)
+    }
 }
