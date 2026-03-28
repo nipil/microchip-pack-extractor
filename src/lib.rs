@@ -12,7 +12,9 @@ async fn head_url(client: &reqwest::Client, url: &str) -> reqwest::Response {
         .head(url)
         .send()
         .await
-        .expect("Cannot progress without head'ing {url}")
+        .expect("Answer needed for HEAD {url}")
+        .error_for_status()
+        .expect("Failed to HEAD {url}")
 }
 
 async fn get_url(client: &reqwest::Client, url: &str) -> reqwest::Response {
@@ -21,7 +23,9 @@ async fn get_url(client: &reqwest::Client, url: &str) -> reqwest::Response {
         .get(url)
         .send()
         .await
-        .expect("Cannot progress without get'ing {url}")
+        .expect("Answer needed for GET {url}")
+        .error_for_status()
+        .expect("Failed to GET {url}")
 }
 
 fn get_etag_from_response(res: &reqwest::Response) -> &str {
@@ -56,7 +60,6 @@ async fn get_cached_url_content_by_etag(
 ) -> Vec<u8> {
     // detect newest version using ETag
     let res = head_url(client, url).await;
-    // TODO: assert return code 200
     let etag = get_etag_from_response(&res);
     eprintln!("Most recent header Etag for {url} is {etag}");
 
@@ -68,7 +71,6 @@ async fn get_cached_url_content_by_etag(
 
     // get latest content
     let res = get_url(client, url).await;
-    // TODO: assert return code 200
     let etag = String::from(get_etag_from_response(&res));
     let content = res.bytes().await.expect("Index must have content");
     let content = Vec::from(content);
@@ -121,7 +123,11 @@ impl Idx {
         // wait for each task to complete
         for task in tasks {
             let (atpack, content) = task.await.expect("Processing DFP should not fail");
-            eprintln!("DFP {} size is {} bytes", atpack.file_name, content.len());
+            eprintln!(
+                "Size of device-family-pack {} is {} bytes",
+                atpack.file_name,
+                content.len()
+            );
         }
     }
 }
