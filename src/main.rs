@@ -53,9 +53,27 @@ async fn get_index(client: &reqwest::Client) -> String {
     content
 }
 
+use serde::Deserialize;
+use serde_xml_rs::from_str;
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct Item {
+    name: String,
+    source: String,
+}
+
 #[tokio::main]
 async fn main() {
     let client = reqwest::Client::new();
     let index = get_index(&client).await;
     eprintln!("Index string size is {}", index.len());
+
+    let src = r#"<?xml version="1.0" encoding="UTF-8"?><Item><name>Banana</name><source>Store</source></Item>"#;
+    let should_be = Item {
+        name: "Banana".to_string(),
+        source: "Store".to_string(),
+    };
+
+    let item: Item = from_str(src).unwrap();
+    assert_eq!(item, should_be);
 }
