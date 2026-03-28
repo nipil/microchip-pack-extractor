@@ -1,10 +1,8 @@
-use futures::{StreamExt, stream};
+use futures::StreamExt;
 use log::{debug, info, trace};
 use serde::Deserialize;
-use serde_xml_rs;
 use std::fs;
 
-const CONCURRENT_LIMIT: usize = 10;
 const CACHE_DIR: &str = "cache";
 const BASE_URL: &str = "https://packs.download.microchip.com";
 const INDEX_NAME: &str = "index.idx";
@@ -107,7 +105,9 @@ impl Idx {
     }
 
     pub async fn process_dfps(&self, client: &reqwest::Client) {
-        let results = stream::iter(self.dpf_pdsc())
+        let limit: usize = num_cpus::get_physical();
+        info!("Processing using {limit} cpu");
+        let results = futures::stream::iter(self.dpf_pdsc())
             .map(|pdsc| {
                 let atpack = pdsc.atpack();
                 let client = &client;
@@ -119,7 +119,7 @@ impl Idx {
                     (atpack, content)
                 }
             })
-            .buffer_unordered(CONCURRENT_LIMIT);
+            .buffer_unordered(limit);
 
         results
             .for_each(|(atpack, content)| async move {
