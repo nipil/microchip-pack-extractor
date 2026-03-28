@@ -3,64 +3,84 @@ use serde_xml_rs::from_str;
 use std::fs;
 
 const BASE_URL: &str = "https://packs.download.microchip.com";
-
 const INDEX_NAME: &str = "index.idx";
 
-pub async fn get(client: &reqwest::Client) -> Idx {
-    fn parse_index(xml: &str) -> Idx {
-        from_str(&xml).expect("Index XML should parse correctly")
-    }
-
-    let url = format!("{BASE_URL}/{INDEX_NAME}");
-
-    // latest etag
-    eprintln!("Fetching index header...");
-    let etag = client
-        .head(&url)
+async fn head_url(client: &reqwest::Client, url: &str) -> reqwest::Response {
+    eprintln!("Fetching headers for {url}");
+    client
+        .head(url)
         .send()
         .await
-        .expect("Cannot progress without getting latest index information");
-    let etag = etag
-        .headers()
-        .get("ETag")
-        .expect("Index headers must contain an ETag")
-        .to_str()
-        .expect("ETag must be convertible to string");
-    let etag = quoted_string::strip_dquotes(etag).expect("Etag must be quoted");
-    eprintln!("Most recent index header Etag is {etag}");
+        .expect("Cannot progress without head'ing {url}")
+}
 
-    // return local cache if any is available
-    let cache = format!("{etag}.{INDEX_NAME}");
-    if let Ok(content) = fs::read_to_string(&cache) {
-        eprintln!("Reusing content from cache {cache}");
-        return parse_index(&content);
-    } else {
-        eprintln!("No available cache {cache}");
-    }
-
-    // get latest content
-    eprintln!("Fetching index content...");
-    let res = client
+async fn get_url(client: &reqwest::Client, url: &str) -> reqwest::Response {
+    eprintln!("Fetching content for {url}");
+    client
         .get(url)
         .send()
         .await
-        .expect("Cannot progress without getting latest index information");
+        .expect("Cannot progress without get'ing {url}")
+}
+
+fn get_etag_from_response(res: &reqwest::Response) -> &str {
     let etag = res
         .headers()
         .get("ETag")
         .expect("Index headers must contain an ETag")
         .to_str()
         .expect("ETag must be convertible to string");
-    let etag = quoted_string::strip_dquotes(etag).expect("Etag must be quoted");
-    let cache = format!("{}.{INDEX_NAME}", etag);
-    let content = res.text().await.expect("Index must have content");
+    quoted_string::strip_dquotes(etag).expect("Etag must be quoted")
+}
 
-    // persist to local cache
-    eprintln!("Writing content to cache {cache} for later use");
-    eprintln!("Index string size is {}", content.len());
+fn get_cached_etag_bytes(name: &str, etag: &str) -> Option<Vec<u8>> {
+    let cache = format!("{etag}.{name}");
+    if let Ok(content) = fs::read(&cache) {
+        eprintln!("Reusing cached content from {cache}");
+        return Some(content);
+    }
+    eprintln!("No cache available for {cache}");
+    None
+}
+
+fn set_cached_etag_bytes(name: &str, etag: &str, content: &Vec<u8>) {
+    let cache = format!("{etag}.{name}");
     fs::write(cache, &content).expect("Writing to cache must not fail");
+}
 
-    parse_index(&content)
+pub async fn get_cached_url_content_by_etag(
+    client: &reqwest::Client,
+    url: &str,
+    cache_file: &str,
+) -> Vec<u8> {
+    // detect newest version using ETag
+    let res = head_url(client, url).await;
+    let etag = get_etag_from_response(&res);
+    eprintln!("Most recent header Etag for {url} is {etag}");
+
+    // return local cache if any is available
+    let cache = get_cached_etag_bytes(cache_file, etag);
+    if let Some(content) = cache {
+        return content;
+    }
+
+    // get latest content
+    let res = get_url(client, url).await;
+    let etag = String::from(get_etag_from_response(&res));
+    let content = res.bytes().await.expect("Index must have content");
+    let content = Vec::from(content);
+
+    // save content to cache
+    set_cached_etag_bytes(cache_file, &etag, &content);
+
+    content
+}
+
+pub async fn pack_index(client: &reqwest::Client) -> Idx {
+    let url = format!("{BASE_URL}/{INDEX_NAME}");
+    let content = get_cached_url_content_by_etag(client, &url, INDEX_NAME).await;
+    let content = str::from_utf8(&content).expect("Index should be valid utf-8 text");
+    from_str(&content).expect("Index XML should parse correctly")
 }
 
 #[derive(Deserialize)]
