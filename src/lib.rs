@@ -1,9 +1,10 @@
+use futures::{StreamExt, stream};
 use log::{debug, info, trace};
 use serde::Deserialize;
 use serde_xml_rs;
 use std::fs;
-use tokio::task::JoinHandle;
 
+const CONCURRENT_LIMIT: usize = 10;
 const CACHE_DIR: &str = "cache";
 const BASE_URL: &str = "https://packs.download.microchip.com";
 const INDEX_NAME: &str = "index.idx";
@@ -106,28 +107,26 @@ impl Idx {
     }
 
     pub async fn process_dfps(&self, client: &reqwest::Client) {
-        let dfps = self.dpf_pdsc();
-        info!(count=dfps.len(); "Processing device packs");
-        type TaskResult = (Atpack, Vec<u8>);
-        let mut tasks: Vec<JoinHandle<TaskResult>> = vec![];
-        // spawn one task per dfp
-        for dfp in dfps {
-            let atpack = dfp.atpack();
-            let new_client = client.clone();
-            tasks.push(tokio::spawn(async move {
-                info!(name=atpack.file_name.as_str(); "Started pack");
-                let content =
-                    get_cached_url_content_by_etag(&new_client, &atpack.url, &atpack.file_name)
-                        .await;
-                debug!(name=atpack.file_name.as_str(); "Pack size");
-                (atpack, content)
-            }));
-        }
-        // wait for each task to complete
-        for task in tasks {
-            let (atpack, content) = task.await.expect("Processing pack should not fail");
-            info!(name=atpack.file_name.as_str(); "Finished pack");
-        }
+        let results = stream::iter(self.dpf_pdsc())
+            .map(|pdsc| {
+                let atpack = pdsc.atpack();
+                let client = &client;
+                async move {
+                    info!(name=atpack.file_name.as_str(); "Started pack");
+                    let content =
+                        get_cached_url_content_by_etag(&client, &atpack.url, &atpack.file_name)
+                            .await;
+                    (atpack, content)
+                }
+            })
+            .buffer_unordered(CONCURRENT_LIMIT);
+
+        results
+            .for_each(|(atpack, content)| async move {
+                let size = content.len();
+                info!(name=atpack.file_name.as_str(), size=size; "Finished pack");
+            })
+            .await;
     }
 }
 
