@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use log::{debug, info, trace, warn};
 use serde::{Deserialize, Serialize};
-use std::{fs, io};
+use std::{env, fs, io, path};
 
 const CACHE_DIR: &str = "cache";
 const BASE_URL: &str = "https://packs.download.microchip.com";
@@ -48,17 +48,28 @@ fn get_etag_from_response(res: &reqwest::Response) -> &str {
     quoted_string::strip_dquotes(etag).expect("Etag must be quoted")
 }
 
+fn get_cache_dir() -> path::PathBuf {
+    let mut p = env::current_dir().expect("Must be able to detect current directory");
+    p.push(CACHE_DIR);
+    p
+}
+
 fn ensure_cache_folder() {
-    debug!(cache=CACHE_DIR; "Ensuring cache folder exists");
+    let cache_dir = get_cache_dir();
+    debug!(cache=cache_dir.as_path().to_string_lossy().as_ref(); "Ensuring cache folder exists");
     fs::DirBuilder::new()
         .recursive(true)
-        .create(CACHE_DIR)
+        .create(cache_dir)
         .expect("Cache directory should exist");
 }
 
 struct CacheItem {
+    cache_file: String,
     content: Vec<u8>,
-    etag: String,
+}
+
+fn get_cache_file(file_name: &str, etag: &str) -> String {
+    format!("{etag}.{file_name}")
 }
 
 async fn get_cached_url_content_by_etag(
@@ -66,50 +77,58 @@ async fn get_cached_url_content_by_etag(
     url: &str,
     file_name: &str,
 ) -> CacheItem {
-    // detect newest version using ETag
-    let res = head_url(client, url).await;
-    let etag = get_etag_from_response(&res);
-    debug!(url=url, etag=etag; "Lookup most recent etag for url");
-
     // ensure the cache folder exists
     ensure_cache_folder();
 
+    // detect newest version using ETag
+    let res = head_url(client, url).await;
+
     // get from cache if it exists
-    if let Some(content) = maybe_load_from_cache_file(file_name, etag) {
+    let cache_file = get_cache_file(&file_name, get_etag_from_response(&res));
+    if let Some(content) = maybe_load_from_cache_file(&cache_file) {
         return CacheItem {
+            cache_file,
             content,
-            etag: etag.to_string(),
         };
     }
 
+    // TOC/TOU: ETag might changed inbetween requests
+    drop(cache_file);
+
     // get latest content
     let res = get_url(client, url).await;
-    let etag = String::from(get_etag_from_response(&res));
+    let cache_file = get_cache_file(file_name, get_etag_from_response(&res));
     let content = res.bytes().await.expect("Index must have content");
     let content = Vec::from(content);
 
-    // save content to cache (TOC/TOU: ETag might changed inbetween)
-    save_to_cache_file(file_name, &etag, &content);
+    // save content to cache
+    save_to_cache_file(&cache_file, &content);
 
-    CacheItem { content, etag }
+    CacheItem {
+        cache_file,
+        content,
+    }
 }
 
-fn maybe_load_from_cache_file(file_name: &str, etag: &str) -> Option<Vec<u8>> {
-    let cache_file = format!("{CACHE_DIR}/{etag}.{file_name}");
-    trace!(cache=cache_file.as_str(); "Cache path");
-    if let Ok(content) = fs::read(&cache_file) {
-        debug!(cache=cache_file.as_str(), size=content.len(); "Reading cache");
+fn maybe_load_from_cache_file(cache_file: &str) -> Option<Vec<u8>> {
+    let mut cache = get_cache_dir();
+    cache.push(&cache_file);
+    let cache_str = cache.to_string_lossy();
+    debug!(cache=cache_str.as_ref(); "Cache candidate");
+    if let Ok(content) = fs::read(&cache) {
+        debug!(cache=cache_str.as_ref(), size=content.len(); "Reading cache");
         return Some(content);
     }
-    debug!(cache=cache_file.as_str(); "No cache available");
-    // return local cache if any is available
+    debug!(cache=cache_str.as_ref(); "No cache available");
     None
 }
 
-fn save_to_cache_file(file_name: &str, etag: &str, content: &[u8]) {
-    let cache_file = format!("{CACHE_DIR}/{etag}.{file_name}");
-    debug!(cache=cache_file.as_str(), size=content.len(); "Writing cache");
-    fs::write(cache_file, content).expect("Writing to cache must not fail");
+fn save_to_cache_file(cache_file: &str, content: &[u8]) {
+    let mut cache = get_cache_dir();
+    cache.push(&cache_file);
+    let cache_str = cache.to_string_lossy();
+    debug!(cache=cache_str.as_ref(), size=content.len(); "Writing cache");
+    fs::write(&cache, content).expect("Writing to cache must not fail");
 }
 
 fn process_archive(content: &[u8], zip_name: &str) {
@@ -150,7 +169,7 @@ impl Idx {
         let index: Self = serde_xml_rs::from_str(&content).expect("Index XML must deserialize");
         debug!("Re-serializing to discard unused stuff...");
         let content = serde_xml_rs::to_string(&index).expect("Index XML must serialize");
-        save_to_cache_file(INDEX_NAME, &cache.etag, content.as_str().as_bytes());
+        save_to_cache_file(&cache.cache_file, content.as_str().as_bytes());
         debug!(size=index.pdscs.len(); "Index size");
         index
     }
@@ -205,7 +224,7 @@ impl Pdsc {
         info!(name=atpack.file_name.as_str(); "Getting pack ...");
         // fetch, read and cache
         let cache = get_cached_url_content_by_etag(&client, &atpack.url, &atpack.file_name).await;
-        info!(name=atpack.file_name.as_str(), size=cache.content.len(), etag=cache.etag.as_str(); "Pack read, processing ...");
+        info!(name=atpack.file_name.as_str(), size=cache.content.len(); "Pack read, processing ...");
         // process interesting files in the archive
         process_archive(&cache.content, atpack.file_name.as_str());
         info!(name=atpack.file_name.as_str(); "Finished pack");
