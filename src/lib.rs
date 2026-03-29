@@ -1,7 +1,7 @@
 use futures::StreamExt;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::{fs, io};
 
 const CACHE_DIR: &str = "cache";
 const BASE_URL: &str = "https://packs.download.microchip.com";
@@ -115,36 +115,57 @@ pub struct Idx {
     pdscs: Vec<Pdsc>,
 }
 
-impl Idx {
-    fn dpf_pdsc(&self) -> Vec<&Pdsc> {
-        self.pdscs
-            .iter()
-            .filter(|x| x.name.ends_with("_DFP.pdsc"))
-            .collect()
+fn process_archive(content: &[u8], zip_name: &str) {
+    let content = io::Cursor::new(content);
+    let mut zip = zip::ZipArchive::new(content).expect("Atpack must be a valid zip archive");
+    for i in 0..zip.len() {
+        let entry = zip.by_index(i).expect("Must be able to get entry from zip");
+        let enclosed_name = entry
+            .enclosed_name()
+            .expect("Zip entry must have an enclosed name");
+        let enclosed_name = enclosed_name
+            .to_str()
+            .expect("Zip entry must be valid utf-8");
+        if entry.is_dir() {
+            debug!(dir=enclosed_name, zip=zip_name; "Ignoring directory");
+            continue;
+        }
+        if entry.is_symlink() {
+            warn!(symlink=enclosed_name, zip=zip_name; "Ignoring symlink");
+            continue;
+        }
+        if !entry.is_file() {
+            panic!(
+                "Unknown entry {} is not a file in {}",
+                enclosed_name, zip_name
+            );
+        }
+        eprintln!("name {} size {}", enclosed_name, entry.size());
     }
+}
 
-    pub async fn process_dfps(&self, client: &reqwest::Client) {
+async fn process_pdsc(pdsc: &Pdsc, client: &reqwest::Client) {
+    let atpack = pdsc.atpack_info();
+    info!(name=atpack.file_name.as_str(); "Getting pack ...");
+    // fetch, read and cache
+    let (content, etag) =
+        get_cached_url_content_by_etag(&client, &atpack.url, &atpack.file_name).await;
+    info!(name=atpack.file_name.as_str(), size=content.len(), etag=etag.as_str(); "Pack read, processing ...");
+    // process interesting files in the archive
+    process_archive(&content, atpack.file_name.as_str());
+    info!(name=atpack.file_name.as_str(); "Finished pack");
+}
+
+impl Idx {
+    pub async fn process(&self, client: &reqwest::Client) {
         let limit: usize = num_cpus::get_physical();
         info!("Processing using {limit} cpu");
-        let results = futures::stream::iter(self.dpf_pdsc())
-            .map(|pdsc| {
-                let atpack = pdsc.atpack();
-                let client = &client;
-                async move {
-                    info!(name=atpack.file_name.as_str(); "Started pack");
-                    let content =
-                        get_cached_url_content_by_etag(&client, &atpack.url, &atpack.file_name)
-                            .await;
-                    (atpack, content)
-                }
+        futures::stream::iter(&self.pdscs /* [0..1] */) // FIXME: remove slice
+            .map(|pdsc| async move {
+                process_pdsc(pdsc, &client).await;
             })
-            .buffer_unordered(limit);
-
-        results
-            .for_each(|(atpack, (content, etag))| async move {
-                let size = content.len();
-                info!(name=atpack.file_name.as_str(), size=size, etag=etag.as_str(); "Finished pack");
-            })
+            .buffer_unordered(limit)
+            .for_each(|_| async move {})
             .await;
     }
 }
@@ -159,14 +180,13 @@ pub struct Pdsc {
     version: String,
 }
 
-#[derive(Debug)]
 struct Atpack {
     file_name: String,
     url: String,
 }
 
 impl Pdsc {
-    fn atpack(&self) -> Atpack {
+    fn atpack_info(&self) -> Atpack {
         let file_name = self
             .name
             .strip_suffix(".pdsc")

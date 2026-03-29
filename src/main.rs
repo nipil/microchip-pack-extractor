@@ -1,6 +1,5 @@
-use microchip_pack_extractor as mpe;
-
 use clap::{Parser, Subcommand};
+use microchip_pack_extractor as mpe;
 
 #[derive(Parser)]
 struct Args {
@@ -21,7 +20,7 @@ async fn main() {
         Commands::Fetch => {
             let client = reqwest::Client::new();
             let index = mpe::pack_index(&client).await;
-            index.process_dfps(&client).await;
+            index.process(&client).await;
         }
     }
 }
