@@ -1,22 +1,29 @@
-use futures::StreamExt;
+use futures::{StreamExt, stream};
 use log::{debug, info, trace, warn};
+use quoted_string::strip_dquotes;
+use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
-use std::{env, fs, io, path};
+use std::env::current_dir;
+use std::fs;
+use std::io::{Cursor, Read};
+use std::path::PathBuf;
 use url::Url;
+use zip::ZipArchive;
 
 const CACHE_DIR: &str = "cache";
 const INDEX_URL: &str = "https://packs.download.microchip.com/index.idx";
+const PACKAGE_CONTENT: &str = "package.content";
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
     ensure_cache_folder_exists();
-    let client = reqwest::Client::new();
+    let client = Client::new();
     let index = Idx::get(&client).await;
-    index.process(&client).await;
+    index.process_pdscs(&client).await;
 }
 
-async fn head_url(client: &reqwest::Client, url: &str) -> reqwest::Response {
+async fn head_url(client: &Client, url: &str) -> Response {
     debug!(url=url; "Fetching headers");
     client
         .head(url)
@@ -27,7 +34,7 @@ async fn head_url(client: &reqwest::Client, url: &str) -> reqwest::Response {
         .expect("Failed to HEAD {url}")
 }
 
-async fn get_url(client: &reqwest::Client, url: &str) -> reqwest::Response {
+async fn get_url(client: &Client, url: &str) -> Response {
     debug!(url=url; "Fetching content");
     client
         .get(url)
@@ -38,7 +45,7 @@ async fn get_url(client: &reqwest::Client, url: &str) -> reqwest::Response {
         .expect("Failed to GET {url}")
 }
 
-fn get_etag_from_response(res: &reqwest::Response) -> &str {
+fn get_etag_from_response(res: &Response) -> &str {
     let etag = res
         .headers()
         .get("ETag")
@@ -46,11 +53,11 @@ fn get_etag_from_response(res: &reqwest::Response) -> &str {
         .to_str()
         .expect("ETag must be convertible to string");
     trace!(etag=etag; "Found ETag in headers");
-    quoted_string::strip_dquotes(etag).expect("Etag must be quoted")
+    strip_dquotes(etag).expect("Etag must be quoted")
 }
 
-fn get_cache_dir() -> path::PathBuf {
-    let mut p = env::current_dir().expect("Must be able to detect current directory");
+fn get_cache_dir() -> PathBuf {
+    let mut p = current_dir().expect("Must be able to detect current directory");
     p.push(CACHE_DIR);
     p
 }
@@ -64,7 +71,7 @@ fn ensure_cache_folder_exists() {
         .expect("Cache directory should exist");
 }
 
-struct CacheItem {
+struct CacheResult {
     file_name: String,
     cache_file: String,
     content: Vec<u8>,
@@ -74,7 +81,7 @@ fn get_cache_file(file_name: &str, etag: &str) -> String {
     format!("{etag}.{file_name}")
 }
 
-async fn get_cached_url_content_by_etag(client: &reqwest::Client, url: &str) -> CacheItem {
+async fn get_cached_url_content_by_etag(client: &Client, url: &str) -> CacheResult {
     let url = Url::parse(url).expect("Must provide a valid url");
     let file_name = url
         .path_segments()
@@ -89,7 +96,7 @@ async fn get_cached_url_content_by_etag(client: &reqwest::Client, url: &str) -> 
     // get from cache if it exists
     let cache_file = get_cache_file(&file_name, get_etag_from_response(&res));
     if let Some(content) = maybe_load_from_cache_file(&cache_file) {
-        return CacheItem {
+        return CacheResult {
             file_name,
             cache_file,
             content,
@@ -108,7 +115,7 @@ async fn get_cached_url_content_by_etag(client: &reqwest::Client, url: &str) -> 
     // save content to cache
     save_to_cache_file(&cache_file, &content);
 
-    CacheItem {
+    CacheResult {
         file_name,
         cache_file,
         content,
@@ -136,33 +143,25 @@ fn save_to_cache_file(cache_file: &str, content: &[u8]) {
     fs::write(&cache, content).expect("Writing to cache must not fail");
 }
 
-fn process_archive(content: &[u8], zip_name: &str) {
-    let content = io::Cursor::new(content);
-    let mut zip = zip::ZipArchive::new(content).expect("Atpack must be a valid zip archive");
-    for i in 0..zip.len() {
-        let entry = zip.by_index(i).expect("Must be able to get entry from zip");
-        let enclosed_name = entry
-            .enclosed_name()
-            .expect("Zip entry must have an enclosed name");
-        let enclosed_name = enclosed_name
-            .to_str()
-            .expect("Zip entry must be valid utf-8");
-        if entry.is_dir() {
-            debug!(dir=enclosed_name, zip=zip_name; "Ignoring directory");
-            continue;
-        }
-        if entry.is_symlink() {
-            warn!(symlink=enclosed_name, zip=zip_name; "Ignoring symlink");
-            continue;
-        }
-        if !entry.is_file() {
-            panic!(
-                "Unknown entry {} is not a file in {}",
-                enclosed_name, zip_name
-            );
-        }
-        eprintln!("name {} size {}", enclosed_name, entry.size());
-    }
+fn proces_zip(content: &[u8], zip_name: &str) {
+    let content = Cursor::new(content);
+    let mut zip = ZipArchive::new(content).expect("Atpack must be a valid zip file");
+    let Ok(mut package_file) = zip.by_name(PACKAGE_CONTENT) else {
+        warn!("Skipping because no package content was found");
+        return;
+    };
+
+    let mut package_content: Vec<u8> = Vec::new();
+    package_file
+        .read_to_end(&mut package_content)
+        .expect("Must be able to read package content");
+    drop(package_file);
+
+    info!("Parsing package content...");
+    let package_content = str::from_utf8(&package_content)
+        .expect("Package content should be valid utf-8 text")
+        .to_string();
+    Package::new(zip_name, &mut zip, package_content).process();
 }
 
 #[derive(Deserialize, Serialize)]
@@ -172,7 +171,7 @@ struct Idx {
 }
 
 impl Idx {
-    async fn get(client: &reqwest::Client) -> Self {
+    async fn get(client: &Client) -> Self {
         let cache = get_cached_url_content_by_etag(client, INDEX_URL).await;
         let content = str::from_utf8(&cache.content).expect("Index should be valid utf-8 text");
         info!("Parsing Index...");
@@ -184,16 +183,21 @@ impl Idx {
         index
     }
 
-    async fn process(&self, client: &reqwest::Client) {
+    async fn process_pdscs(&self, client: &Client) {
         let limit: usize = num_cpus::get_physical();
         info!("Processing using {limit} cpu");
-        futures::stream::iter(&self.pdscs /* [0..1] */) // FIXME: remove slice
+
+        // FIXME: remove slice
+        let r = &self.pdscs[0..1];
+        // let r =&self.pdscs[..];
+        let buffer = stream::iter(r)
             .map(|pdsc| async move {
+                // FIXME: split async fetch with blocking post-processing
                 pdsc.process(&client).await;
             })
-            .buffer_unordered(limit)
-            .for_each(|_| async move {})
-            .await;
+            .buffer_unordered(limit);
+
+        buffer.for_each(|_| async move {}).await;
     }
 }
 
@@ -220,12 +224,39 @@ impl Pdsc {
         Url::parse(url.as_str()).expect("Must be a valid url")
     }
 
-    async fn process(&self, client: &reqwest::Client) {
+    async fn process(&self, client: &Client) {
         let url = self.atpack_url();
         info!(url=url.as_str(); "Getting pack ...");
         let cache = get_cached_url_content_by_etag(&client, url.as_str()).await;
-        info!(cache=cache.cache_file.as_str(), size=cache.content.len(); "Pack stored, processing ...");
-        process_archive(&cache.content, cache.file_name.as_str());
+        // FIXME: not async code, move to post processing ? into new tasks ? multithreading ?
+        info!(cache=cache.cache_file.as_str(), size=cache.content.len(); "Processing pack ... ");
+        proces_zip(&cache.content, cache.file_name.as_str());
         info!(name=cache.file_name.as_str(); "Finished pack");
     }
+}
+
+struct Package<'a, T> {
+    zip_name: &'a str,
+    zip: &'a mut ZipArchive<T>,
+    package_content: PackageContent,
+}
+
+impl<'a, T> Package<'a, T> {
+    fn new(zip_name: &'a str, zip: &'a mut ZipArchive<T>, package_content: String) -> Self {
+        Package {
+            zip_name,
+            zip,
+            package_content: serde_xml_rs::from_str(package_content.as_str())
+                .expect("Package content XML must deserialize"),
+        }
+    }
+
+    fn process(&self) {
+        println!("{:#?}", self.package_content);
+    }
+}
+
+#[derive(Deserialize, Debug)]
+struct PackageContent {
+    // #[serde(rename = "@version")]
 }
