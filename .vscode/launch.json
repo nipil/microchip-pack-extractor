@@ -5,13 +5,15 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug executable 'microchip-pack-extractor'",
+            "name": "Debug executable 'microchip-pack-extractor' fetch",
             "type": "lldb",
             "request": "launch",
             "cargo": {
                 "args": [
                     "run",
-                    "--bin=microchip-pack-extractor"
+                    "--bin=microchip-pack-extractor",
+                    "--",
+                    "fetch"
                 ]
             },
             "env": {
