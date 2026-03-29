@@ -40,6 +40,14 @@ fn get_etag_from_response(res: &reqwest::Response) -> &str {
     quoted_string::strip_dquotes(etag).expect("Etag must be quoted")
 }
 
+fn ensure_cache_folder() {
+    debug!(cache=CACHE_DIR; "Ensuring cache folder exists");
+    fs::DirBuilder::new()
+        .recursive(true)
+        .create(CACHE_DIR)
+        .expect("Cache directory should exist");
+}
+
 async fn get_cached_url_content_by_etag(
     client: &reqwest::Client,
     url: &str,
@@ -51,20 +59,12 @@ async fn get_cached_url_content_by_etag(
     debug!(url=url, etag=etag; "Lookup most recent etag for url");
 
     // ensure the cache folder exists
-    debug!(cache=CACHE_DIR; "Ensuring cache folder exists");
-    fs::DirBuilder::new()
-        .recursive(true)
-        .create(CACHE_DIR)
-        .expect("Cache directory should exist");
+    ensure_cache_folder();
 
-    // return local cache if any is available
-    let cache_file = format!("{CACHE_DIR}/{etag}.{file_name}");
-    trace!(cache=cache_file.as_str(); "Cache path");
-    if let Ok(content) = fs::read(&cache_file) {
-        debug!(cache=cache_file.as_str(), size=content.len(); "Reading cache");
-        return content;
+    // get from cache if it exists
+    if let Some(value) = maybe_load_from_cache_file(file_name, etag) {
+        return value;
     }
-    debug!(cache=cache_file.as_str(); "No cache available");
 
     // get latest content
     let res = get_url(client, url).await;
@@ -73,11 +73,27 @@ async fn get_cached_url_content_by_etag(
     let content = Vec::from(content);
 
     // save content to cache (TOC/TOU: ETag might changed inbetween)
-    let cache_file = format!("{CACHE_DIR}/{etag}.{file_name}");
-    debug!(cache=cache_file.as_str(), size=content.len(); "Writing cache");
-    fs::write(cache_file, &content).expect("Writing to cache must not fail");
+    save_to_cache_file(file_name, &etag, &content);
 
     content
+}
+
+fn maybe_load_from_cache_file(file_name: &str, etag: &str) -> Option<Vec<u8>> {
+    let cache_file = format!("{CACHE_DIR}/{etag}.{file_name}");
+    trace!(cache=cache_file.as_str(); "Cache path");
+    if let Ok(content) = fs::read(&cache_file) {
+        debug!(cache=cache_file.as_str(), size=content.len(); "Reading cache");
+        return Some(content);
+    }
+    debug!(cache=cache_file.as_str(); "No cache available");
+    // return local cache if any is available
+    None
+}
+
+fn save_to_cache_file(file_name: &str, etag: &str, content: &Vec<u8>) {
+    let cache_file = format!("{CACHE_DIR}/{etag}.{file_name}");
+    debug!(cache=cache_file.as_str(), size=content.len(); "Writing cache");
+    fs::write(cache_file, content).expect("Writing to cache must not fail");
 }
 
 pub async fn pack_index(client: &reqwest::Client) -> Idx {
