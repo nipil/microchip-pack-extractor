@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use log::{debug, info, trace};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 
 const CACHE_DIR: &str = "cache";
@@ -52,7 +52,7 @@ async fn get_cached_url_content_by_etag(
     client: &reqwest::Client,
     url: &str,
     file_name: &str,
-) -> Vec<u8> {
+) -> (Vec<u8>, String) {
     // detect newest version using ETag
     let res = head_url(client, url).await;
     let etag = get_etag_from_response(&res);
@@ -62,8 +62,8 @@ async fn get_cached_url_content_by_etag(
     ensure_cache_folder();
 
     // get from cache if it exists
-    if let Some(value) = maybe_load_from_cache_file(file_name, etag) {
-        return value;
+    if let Some(content) = maybe_load_from_cache_file(file_name, etag) {
+        return (content, etag.to_string());
     }
 
     // get latest content
@@ -75,7 +75,7 @@ async fn get_cached_url_content_by_etag(
     // save content to cache (TOC/TOU: ETag might changed inbetween)
     save_to_cache_file(file_name, &etag, &content);
 
-    content
+    (content, etag)
 }
 
 fn maybe_load_from_cache_file(file_name: &str, etag: &str) -> Option<Vec<u8>> {
@@ -90,7 +90,7 @@ fn maybe_load_from_cache_file(file_name: &str, etag: &str) -> Option<Vec<u8>> {
     None
 }
 
-fn save_to_cache_file(file_name: &str, etag: &str, content: &Vec<u8>) {
+fn save_to_cache_file(file_name: &str, etag: &str, content: &[u8]) {
     let cache_file = format!("{CACHE_DIR}/{etag}.{file_name}");
     debug!(cache=cache_file.as_str(), size=content.len(); "Writing cache");
     fs::write(cache_file, content).expect("Writing to cache must not fail");
@@ -98,15 +98,18 @@ fn save_to_cache_file(file_name: &str, etag: &str, content: &Vec<u8>) {
 
 pub async fn pack_index(client: &reqwest::Client) -> Idx {
     let url = format!("{BASE_URL}/{INDEX_NAME}");
-    let content = get_cached_url_content_by_etag(client, &url, INDEX_NAME).await;
+    let (content, etag) = get_cached_url_content_by_etag(client, &url, INDEX_NAME).await;
     let content = str::from_utf8(&content).expect("Index should be valid utf-8 text");
     info!("Parsing Index...");
-    let index: Idx = serde_xml_rs::from_str(&content).expect("Index XML should parse correctly");
+    let index: Idx = serde_xml_rs::from_str(&content).expect("Index XML must deserialize");
+    debug!("Re-serializing to discard unused stuff...");
+    let content = serde_xml_rs::to_string(&index).expect("Index XML must serialize");
+    save_to_cache_file(INDEX_NAME, &etag, content.as_str().as_bytes());
     debug!(size=index.pdscs.len(); "Index size");
     index
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Idx {
     #[serde(rename = "pdsc")]
     pdscs: Vec<Pdsc>,
@@ -138,15 +141,15 @@ impl Idx {
             .buffer_unordered(limit);
 
         results
-            .for_each(|(atpack, content)| async move {
+            .for_each(|(atpack, (content, etag))| async move {
                 let size = content.len();
-                info!(name=atpack.file_name.as_str(), size=size; "Finished pack");
+                info!(name=atpack.file_name.as_str(), size=size, etag=etag.as_str(); "Finished pack");
             })
             .await;
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Pdsc {
     #[serde(rename = "@url")]
     fqdn: String,
