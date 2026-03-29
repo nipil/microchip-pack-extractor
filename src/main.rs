@@ -147,7 +147,7 @@ fn proces_zip(content: &[u8], zip_name: &str) {
     let content = Cursor::new(content);
     let mut zip = ZipArchive::new(content).expect("Atpack must be a valid zip file");
     let Ok(mut package_file) = zip.by_name(PACKAGE_CONTENT) else {
-        warn!("Skipping because no package content was found");
+        warn!(zip=zip_name; "Skipping zip because no package content was found");
         return;
     };
 
@@ -157,11 +157,10 @@ fn proces_zip(content: &[u8], zip_name: &str) {
         .expect("Must be able to read package content");
     drop(package_file);
 
-    info!("Parsing package content...");
-    let package_content = str::from_utf8(&package_content)
-        .expect("Package content should be valid utf-8 text")
-        .to_string();
-    Package::new(zip_name, &mut zip, package_content).process();
+    info!(zip=zip_name; "Parsing package content...");
+    let package_content =
+        str::from_utf8(&package_content).expect("Package content should be valid utf-8 text");
+    PackageContent::new(zip_name, &mut zip, package_content).process();
 }
 
 #[derive(Deserialize, Serialize)]
@@ -188,8 +187,8 @@ impl Idx {
         info!("Processing using {limit} cpu");
 
         // FIXME: remove slice
-        let r = &self.pdscs[0..1];
-        // let r =&self.pdscs[..];
+        // let r = &self.pdscs[0..1];
+        let r = &self.pdscs[..];
         let buffer = stream::iter(r)
             .map(|pdsc| async move {
                 // FIXME: split async fetch with blocking post-processing
@@ -235,28 +234,66 @@ impl Pdsc {
     }
 }
 
-struct Package<'a, T> {
+struct PackageContent<'a, T> {
     zip_name: &'a str,
     zip: &'a mut ZipArchive<T>,
-    package_content: PackageContent,
+    package: Package,
 }
 
-impl<'a, T> Package<'a, T> {
-    fn new(zip_name: &'a str, zip: &'a mut ZipArchive<T>, package_content: String) -> Self {
-        Package {
+impl<'a, T> PackageContent<'a, T> {
+    fn new(zip_name: &'a str, zip: &'a mut ZipArchive<T>, content: &str) -> Self {
+        Self {
             zip_name,
             zip,
-            package_content: serde_xml_rs::from_str(package_content.as_str())
-                .expect("Package content XML must deserialize"),
+            package: serde_xml_rs::from_str(content).expect("Package content XML must deserialize"),
         }
     }
 
     fn process(&self) {
-        println!("{:#?}", self.package_content);
+        trace!("Package{:?}", self.package);
     }
 }
 
 #[derive(Deserialize, Debug)]
-struct PackageContent {
-    // #[serde(rename = "@version")]
+struct Package {
+    content: Content,
+}
+
+#[derive(Deserialize, Debug)]
+struct Content {
+    resources: Vec<Resources>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Resources {
+    #[serde(rename = "@target")]
+    target: String,
+    #[serde(rename = "resource")]
+    resources: Vec<Resource>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Resource {
+    #[serde(rename = "@type")]
+    type_: String,
+    #[serde(rename = "@subdir")]
+    subdir: String,
+    #[serde(default, rename = "includes")]
+    includes: Vec<Includes>,
+    #[serde(default, rename = "meta")]
+    meta: Vec<Meta>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Includes {
+    #[serde(rename = "@pattern")]
+    pattern: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct Meta {
+    #[serde(rename = "@key")]
+    key: String,
+    #[serde(rename = "@value")]
+    value: String,
 }
