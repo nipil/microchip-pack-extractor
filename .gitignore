@@ -26,3 +26,5 @@ target
 
 # Application cache
 cache/
+extracted/
+cached/

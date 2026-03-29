@@ -2,14 +2,15 @@ use futures::StreamExt;
 use log::{debug, info, trace, warn};
 use serde::{Deserialize, Serialize};
 use std::{env, fs, io, path};
+use url::Url;
 
 const CACHE_DIR: &str = "cache";
-const BASE_URL: &str = "https://packs.download.microchip.com";
-const INDEX_NAME: &str = "index.idx";
+const INDEX_URL: &str = "https://packs.download.microchip.com/index.idx";
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
+    ensure_cache_folder_exists();
     let client = reqwest::Client::new();
     let index = Idx::get(&client).await;
     index.process(&client).await;
@@ -54,7 +55,7 @@ fn get_cache_dir() -> path::PathBuf {
     p
 }
 
-fn ensure_cache_folder() {
+fn ensure_cache_folder_exists() {
     let cache_dir = get_cache_dir();
     debug!(cache=cache_dir.as_path().to_string_lossy().as_ref(); "Ensuring cache folder exists");
     fs::DirBuilder::new()
@@ -64,6 +65,7 @@ fn ensure_cache_folder() {
 }
 
 struct CacheItem {
+    file_name: String,
     cache_file: String,
     content: Vec<u8>,
 }
@@ -72,21 +74,23 @@ fn get_cache_file(file_name: &str, etag: &str) -> String {
     format!("{etag}.{file_name}")
 }
 
-async fn get_cached_url_content_by_etag(
-    client: &reqwest::Client,
-    url: &str,
-    file_name: &str,
-) -> CacheItem {
-    // ensure the cache folder exists
-    ensure_cache_folder();
+async fn get_cached_url_content_by_etag(client: &reqwest::Client, url: &str) -> CacheItem {
+    let url = Url::parse(url).expect("Must provide a valid url");
+    let file_name = url
+        .path_segments()
+        .expect("Url must have a path")
+        .last()
+        .expect("Url must hold a filename")
+        .to_string();
 
     // detect newest version using ETag
-    let res = head_url(client, url).await;
+    let res = head_url(client, url.as_str()).await;
 
     // get from cache if it exists
     let cache_file = get_cache_file(&file_name, get_etag_from_response(&res));
     if let Some(content) = maybe_load_from_cache_file(&cache_file) {
         return CacheItem {
+            file_name,
             cache_file,
             content,
         };
@@ -96,8 +100,8 @@ async fn get_cached_url_content_by_etag(
     drop(cache_file);
 
     // get latest content
-    let res = get_url(client, url).await;
-    let cache_file = get_cache_file(file_name, get_etag_from_response(&res));
+    let res = get_url(client, url.as_str()).await;
+    let cache_file = get_cache_file(&file_name, get_etag_from_response(&res));
     let content = res.bytes().await.expect("Index must have content");
     let content = Vec::from(content);
 
@@ -105,6 +109,7 @@ async fn get_cached_url_content_by_etag(
     save_to_cache_file(&cache_file, &content);
 
     CacheItem {
+        file_name,
         cache_file,
         content,
     }
@@ -160,10 +165,15 @@ fn process_archive(content: &[u8], zip_name: &str) {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+struct Idx {
+    #[serde(rename = "pdsc")]
+    pdscs: Vec<Pdsc>,
+}
+
 impl Idx {
     async fn get(client: &reqwest::Client) -> Self {
-        let url = format!("{BASE_URL}/{INDEX_NAME}");
-        let cache = get_cached_url_content_by_etag(client, &url, INDEX_NAME).await;
+        let cache = get_cached_url_content_by_etag(client, INDEX_URL).await;
         let content = str::from_utf8(&cache.content).expect("Index should be valid utf-8 text");
         info!("Parsing Index...");
         let index: Self = serde_xml_rs::from_str(&content).expect("Index XML must deserialize");
@@ -188,12 +198,6 @@ impl Idx {
 }
 
 #[derive(Deserialize, Serialize)]
-struct Idx {
-    #[serde(rename = "pdsc")]
-    pdscs: Vec<Pdsc>,
-}
-
-#[derive(Deserialize, Serialize)]
 struct Pdsc {
     #[serde(rename = "@url")]
     fqdn: String,
@@ -203,30 +207,25 @@ struct Pdsc {
     version: String,
 }
 
-struct Atpack {
-    file_name: String,
-    url: String,
-}
-
 impl Pdsc {
-    fn atpack_info(&self) -> Atpack {
+    fn atpack_url(&self) -> Url {
         let file_name = self
             .name
             .strip_suffix(".pdsc")
             .expect("PDSC name must end with .pdsc");
-        let file_name = format!("{}.{}.atpack", file_name, self.version);
-        let url = format!("https://{}/{}", self.fqdn, file_name);
-        Atpack { file_name, url }
+        let url = format!(
+            "https://{}/{}.{}.atpack",
+            self.fqdn, file_name, self.version
+        );
+        Url::parse(url.as_str()).expect("Must be a valid url")
     }
 
     async fn process(&self, client: &reqwest::Client) {
-        let atpack = self.atpack_info();
-        info!(name=atpack.file_name.as_str(); "Getting pack ...");
-        // fetch, read and cache
-        let cache = get_cached_url_content_by_etag(&client, &atpack.url, &atpack.file_name).await;
-        info!(name=atpack.file_name.as_str(), size=cache.content.len(); "Pack read, processing ...");
-        // process interesting files in the archive
-        process_archive(&cache.content, atpack.file_name.as_str());
-        info!(name=atpack.file_name.as_str(); "Finished pack");
+        let url = self.atpack_url();
+        info!(url=url.as_str(); "Getting pack ...");
+        let cache = get_cached_url_content_by_etag(&client, url.as_str()).await;
+        info!(cache=cache.cache_file.as_str(), size=cache.content.len(); "Pack stored, processing ...");
+        process_archive(&cache.content, cache.file_name.as_str());
+        info!(name=cache.file_name.as_str(); "Finished pack");
     }
 }
