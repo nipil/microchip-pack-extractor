@@ -1,5 +1,4 @@
 use reqwest::Client;
-use index::Index;
 
 mod index;
 mod package;
@@ -8,7 +7,8 @@ mod webcache;
 #[tokio::main]
 async fn main() {
     env_logger::init();
+    webcache::ensure_cache_folder_exists().await;
     let client = Client::new();
-    let index = Index::get(&client).await;
-    index.process_pdscs().await;
+    let idx = index::Idx::get(&client).await;
+    idx.process_pdscs(&client).await;
 }

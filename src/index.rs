@@ -9,38 +9,8 @@ use super::webcache;
 
 const INDEX_URL: &str = "https://packs.download.microchip.com/index.idx";
 
-pub struct Index<'a> {
-    client: &'a Client,
-    idx: Idx,
-}
-
-impl<'a> Index<'a> {
-    pub async fn get(client: &'a Client) -> Self {
-        webcache::ensure_cache_folder_exists();
-        let idx = Idx::get(&client).await;
-        Self { client, idx }
-    }
-
-    pub async fn process_pdscs(&self) {
-        let limit: usize = num_cpus::get_physical();
-        info!("Processing using {limit} cpu");
-
-        // FIXME: remove slice
-        // let r = &self.pdscs[0..1];
-        let r = &self.idx.pdscs[..];
-        let buffer = stream::iter(r)
-            .map(|pdsc| async move {
-                // FIXME: split async fetch with blocking post-processing
-                pdsc.process(&self.client).await;
-            })
-            .buffer_unordered(limit);
-
-        buffer.for_each(|_| async move {}).await;
-    }
-}
-
 #[derive(Deserialize, Serialize)]
-struct Idx {
+pub struct Idx {
     #[serde(rename = "pdsc")]
     pub pdscs: Vec<Pdsc>,
 }
@@ -53,14 +23,31 @@ impl Idx {
         let index: Self = serde_xml_rs::from_str(&content).expect("Index XML must deserialize");
         debug!("Re-serializing to discard unused stuff...");
         let content = serde_xml_rs::to_string(&index).expect("Index XML must serialize");
-        webcache::save_to_cache_file(&cache.cache_file, content.as_str().as_bytes());
+        webcache::save_to_cache_file(&cache.cache_file, content.as_str().as_bytes()).await;
         debug!(size=index.pdscs.len(); "Index size");
         index
+    }
+
+    pub async fn process_pdscs(&self, client: &Client) {
+        let limit: usize = num_cpus::get_physical();
+        info!("Processing using {limit} cpu");
+
+        // FIXME: remove slice
+        // let r = &self.pdscs[0..1];
+        let r = &self.pdscs[..];
+        let buffer = stream::iter(r)
+            .map(|pdsc| async move {
+                // FIXME: split async fetch with blocking post-processing
+                pdsc.process(client).await;
+            })
+            .buffer_unordered(limit);
+
+        buffer.for_each(|_| async move {}).await;
     }
 }
 
 #[derive(Deserialize, Serialize)]
-struct Pdsc {
+pub struct Pdsc {
     #[serde(rename = "@url")]
     fqdn: String,
     #[serde(rename = "@name")]
