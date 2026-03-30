@@ -1,45 +1,13 @@
-use log::{debug, trace};
-use quoted_string::strip_dquotes;
-use reqwest::{Client, Response};
+use log::debug;
+use reqwest::Client;
 use std::env::current_dir;
 use std::path::PathBuf;
 use tokio::fs;
 use url::Url;
 
+use crate::web;
+
 const CACHE_DIR: &str = "cache";
-
-async fn head_url(client: &Client, url: &str) -> Response {
-    debug!(url=url; "Fetching headers");
-    client
-        .head(url)
-        .send()
-        .await
-        .expect("Answer needed for HEAD {url}")
-        .error_for_status()
-        .expect("Failed to HEAD {url}")
-}
-
-async fn get_url(client: &Client, url: &str) -> Response {
-    debug!(url=url; "Fetching content");
-    client
-        .get(url)
-        .send()
-        .await
-        .expect("Answer needed for GET {url}")
-        .error_for_status()
-        .expect("Failed to GET {url}")
-}
-
-fn get_etag_from_response(res: &Response) -> &str {
-    let etag = res
-        .headers()
-        .get("ETag")
-        .expect("Headers must contain an ETag")
-        .to_str()
-        .expect("ETag must be convertible to string");
-    trace!(etag=etag; "Found ETag in headers");
-    strip_dquotes(etag).expect("Etag must be quoted")
-}
 
 fn get_cache_dir() -> PathBuf {
     let mut p = current_dir().expect("Must be able to detect current directory");
@@ -77,10 +45,10 @@ pub async fn get_cached_url_content_by_etag(client: &Client, url: &str) -> Cache
         .to_string();
 
     // detect newest version using ETag
-    let res = head_url(client, url.as_str()).await;
+    let res = web::head_url(client, url.as_str()).await;
 
     // get from cache if it exists
-    let cache_file = get_cache_file(&file_name, get_etag_from_response(&res));
+    let cache_file = get_cache_file(&file_name, web::get_etag_from_response(&res));
     if let Some(content) = maybe_load_from_cache_file(&cache_file).await {
         return CacheResult {
             file_name,
@@ -93,8 +61,8 @@ pub async fn get_cached_url_content_by_etag(client: &Client, url: &str) -> Cache
     drop(cache_file);
 
     // get latest content
-    let res = get_url(client, url.as_str()).await;
-    let cache_file = get_cache_file(&file_name, get_etag_from_response(&res));
+    let res = web::get_url(client, url.as_str()).await;
+    let cache_file = get_cache_file(&file_name, web::get_etag_from_response(&res));
     let content = res.bytes().await.expect("Url must have content");
     let content = Vec::from(content);
 

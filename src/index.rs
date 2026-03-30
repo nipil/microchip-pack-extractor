@@ -4,8 +4,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::package;
-use super::webcache;
+use crate::cache;
+use crate::package;
 
 const INDEX_URL: &str = "https://packs.download.microchip.com/index.idx";
 
@@ -17,13 +17,13 @@ pub struct Idx {
 
 impl Idx {
     pub async fn get(client: &Client) -> Self {
-        let cache = webcache::get_cached_url_content_by_etag(client, INDEX_URL).await;
+        let cache = cache::get_cached_url_content_by_etag(client, INDEX_URL).await;
         let content = str::from_utf8(&cache.content).expect("Index should be valid utf-8 text");
         info!("Parsing Index...");
         let index: Self = serde_xml_rs::from_str(&content).expect("Index XML must deserialize");
         debug!("Re-serializing to discard unused stuff...");
         let content = serde_xml_rs::to_string(&index).expect("Index XML must serialize");
-        webcache::save_to_cache_file(&cache.cache_file, content.as_str().as_bytes()).await;
+        cache::save_to_cache_file(&cache.cache_file, content.as_str().as_bytes()).await;
         debug!(size=index.pdscs.len(); "Index size");
         index
     }
@@ -32,10 +32,7 @@ impl Idx {
         let limit: usize = num_cpus::get_physical();
         info!("Processing using {limit} cpu");
 
-        // FIXME: remove slice
-        // let r = &self.pdscs[0..1];
-        let r = &self.pdscs[..];
-        let buffer = stream::iter(r)
+        let buffer = stream::iter(&self.pdscs[..])
             .map(|pdsc| async move {
                 // FIXME: split async fetch with blocking post-processing
                 pdsc.process(client).await;
@@ -72,7 +69,7 @@ impl Pdsc {
     async fn process(&self, client: &Client) {
         let url = self.atpack_url();
         info!(url=url.as_str(); "Getting pack ...");
-        let cache = webcache::get_cached_url_content_by_etag(&client, url.as_str()).await;
+        let cache = cache::get_cached_url_content_by_etag(&client, url.as_str()).await;
         // FIXME: not async code, move to post processing ? into new tasks ? multithreading ?
         info!(cache=cache.cache_file.as_str(), size=cache.content.len(); "Processing pack ... ");
         package::proces_zip(&cache.content, cache.file_name.as_str());
