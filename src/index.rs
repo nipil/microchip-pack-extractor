@@ -5,14 +5,13 @@ use url::Url;
 
 use crate::cache;
 use crate::cache::CacheResult;
-use crate::package;
 
 const INDEX_URL: &str = "https://packs.download.microchip.com/index.idx";
 
 #[derive(Deserialize, Serialize)]
 pub struct Idx {
     #[serde(rename = "pdsc")]
-    pub pdscs: Vec<Pdsc>,
+    pdscs: Vec<Pdsc>,
 }
 
 impl Idx {
