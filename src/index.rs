@@ -1,10 +1,10 @@
-use futures::{StreamExt, stream};
 use log::{debug, info};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::cache;
+use crate::cache::CacheResult;
 use crate::package;
 
 const INDEX_URL: &str = "https://packs.download.microchip.com/index.idx";
@@ -27,19 +27,15 @@ impl Idx {
         debug!(size=index.pdscs.len(); "Index size");
         index
     }
+}
 
-    pub async fn process_pdscs(&self, client: &Client) {
-        let limit: usize = num_cpus::get_physical();
-        info!("Processing using {limit} cpu");
+// chatgpt helped me with that, we're doomed.
+impl<'a> IntoIterator for &'a Idx {
+    type Item = &'a Pdsc;
+    type IntoIter = std::slice::Iter<'a, Pdsc>;
 
-        let buffer = stream::iter(&self.pdscs[..])
-            .map(|pdsc| async move {
-                // FIXME: split async fetch with blocking post-processing
-                pdsc.process(client).await;
-            })
-            .buffer_unordered(limit);
-
-        buffer.for_each(|_| async move {}).await;
+    fn into_iter(self) -> Self::IntoIter {
+        self.pdscs.iter()
     }
 }
 
@@ -66,13 +62,9 @@ impl Pdsc {
         Url::parse(url.as_str()).expect("Must be a valid url")
     }
 
-    async fn process(&self, client: &Client) {
+    pub async fn fetch(&self, client: &Client) -> CacheResult {
         let url = self.atpack_url();
         info!(url=url.as_str(); "Getting pack ...");
-        let cache = cache::get_cached_url_content_by_etag(&client, url.as_str()).await;
-        // FIXME: not async code, move to post processing ? into new tasks ? multithreading ?
-        info!(cache=cache.cache_file.as_str(), size=cache.content.len(); "Processing pack ... ");
-        package::proces_zip(&cache.content, cache.file_name.as_str());
-        info!(name=cache.file_name.as_str(); "Finished pack");
+        cache::get_cached_url_content_by_etag(&client, url.as_str()).await
     }
 }

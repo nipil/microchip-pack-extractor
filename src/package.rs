@@ -6,6 +6,7 @@ use zip::ZipArchive;
 const PACKAGE_CONTENT: &str = "package.content";
 
 pub fn proces_zip(content: &[u8], zip_name: &str) {
+    info!(name=zip_name; "Processing pack ... ");
     let content = Cursor::new(content);
     let mut zip = ZipArchive::new(content).expect("Atpack must be a valid zip file");
     let Ok(mut package_file) = zip.by_name(PACKAGE_CONTENT) else {
