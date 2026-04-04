@@ -3,9 +3,25 @@ use serde::Deserialize;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
+use crate::cache::CacheResult;
+
 const PACKAGE_CONTENT: &str = "package.content";
 
-pub fn proces_zip(content: &[u8], zip_name: &str) {
+pub async fn process_cache_result(cache: CacheResult) {
+    // processing the zip will be long
+    // spawn a sync thread
+    // and wait for completion through async channel
+    let (send, recv) = tokio::sync::oneshot::channel();
+    rayon::spawn(move || {
+        proces_zip(&cache.content, &cache.file_name);
+        send.send(())
+            .unwrap_or_else(|_| panic!("Receiver dropped in Idx::parse"));
+    });
+    recv.await
+        .expect("Panic in rayon::spawn : package processing of zip must not fail")
+}
+
+fn proces_zip(content: &[u8], zip_name: &str) {
     info!(name=zip_name; "Processing pack ... ");
     let content = Cursor::new(content);
     let mut zip = ZipArchive::new(content).expect("Atpack must be a valid zip file");
@@ -24,6 +40,7 @@ pub fn proces_zip(content: &[u8], zip_name: &str) {
     let package_content =
         str::from_utf8(&package_content).expect("Package content should be valid utf-8 text");
     PackageContent::new(zip_name, &mut zip, package_content).process();
+    info!(name=zip_name; "Finished pack");
 }
 
 struct PackageContent<'a, T> {

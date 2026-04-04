@@ -1,7 +1,5 @@
 use futures::{StreamExt, stream};
-use log::info;
 use reqwest::Client;
-use tokio::task::spawn_blocking;
 
 mod cache;
 mod index;
@@ -23,17 +21,7 @@ async fn main() {
         // process them in whichever order they finish first
         .buffer_unordered(num_cpus::get_physical())
         // then feed them to a new task
-        .for_each(|cache| async move {
-            // which will be spawned on tokio thread pool for blocking operations
-            let blocking_task = spawn_blocking(move || {
-                package::proces_zip(&cache.content, &cache.file_name);
-                info!(name=cache.file_name.as_str(); "Finished pack");
-            });
-            // wait for the tokio task wrapping the blocking operation to finish
-            blocking_task
-                .await
-                .expect("Package process zip must not fail");
-        })
+        .for_each(|cache| async move { package::process_cache_result(cache).await })
         // wait for all tasks to complete
         .await;
 }
