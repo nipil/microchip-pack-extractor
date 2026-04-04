@@ -17,14 +17,31 @@ pub struct Idx {
 impl Idx {
     pub async fn get(client: &Client) -> Self {
         let cache = cache::get_cached_url_content_by_etag(client, INDEX_URL).await;
-        let content = str::from_utf8(&cache.content).expect("Index should be valid utf-8 text");
-        info!("Parsing Index...");
-        let index: Self = serde_xml_rs::from_str(&content).expect("Index XML must deserialize");
+        // i had to move cache.content into the function, because as a reference it is moved
+        // into a thread and while in thread, it must outlive the current and calling function
+        // because the await "yields" and thus reference must outlive 'static
+        // and i do not know how to do that :-|
+        let index = Self::parse(cache.content).await;
         debug!("Re-serializing to discard unused stuff...");
         let content = serde_xml_rs::to_string(&index).expect("Index XML must serialize");
         cache::save_to_cache_file(&cache.cache_file, content.as_str().as_bytes()).await;
         debug!(size=index.pdscs.len(); "Index size");
         index
+    }
+
+    async fn parse(content: Vec<u8>) -> Self {
+        info!("Parsing Index...");
+        let (send, recv) = tokio::sync::oneshot::channel();
+        // parsing the xml can be long
+        // so spawn a sync thread and wait for completion
+        // waiting is done through the channel
+        rayon::spawn(move || {
+            let content = str::from_utf8(&content).expect("Index should be valid utf-8 text");
+            let idx = serde_xml_rs::from_str(&content).expect("Index XML must deserialize");
+            send.send(idx)
+                .unwrap_or_else(|_| panic!("Receiver dropped in Idx::parse"));
+        });
+        recv.await.expect("Panic in rayon::spawn in Idx::parse")
     }
 }
 
