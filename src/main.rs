@@ -1,6 +1,7 @@
 use futures::{StreamExt, stream};
 use reqwest::Client;
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_flame::FlameLayer;
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cache;
 mod index;
@@ -9,11 +10,15 @@ mod web;
 
 #[tokio::main]
 async fn main() {
+    // FlameLayer writes a folded-stacks file while the guard is alive.
+    // The guard flushes + closes the file on drop (end of main).
+    let (flame_layer, _guard) =
+        FlameLayer::with_file("./tracing.folded").expect("Flame tracing must not fail");
+
     tracing_subscriber::registry()
-        .with(
-            fmt::layer(), /* .with_span_events(fmt::format::FmtSpan::CLOSE) // prints duration on span exit */
-        )
         .with(EnvFilter::from_default_env())
+        .with(fmt::layer())
+        .with(flame_layer)
         .init();
 
     // Prepare resources for dependency injection

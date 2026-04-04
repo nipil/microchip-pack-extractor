@@ -30,7 +30,6 @@ impl Idx {
         index
     }
 
-    #[instrument(skip(content))]
     async fn parse(content: Vec<u8>) -> Self {
         info!("Parsing Index...");
         let (send, recv) = tokio::sync::oneshot::channel();
@@ -80,6 +79,7 @@ impl Pdsc {
         Url::parse(url.as_str()).expect("Must be a valid url")
     }
 
+    #[instrument(skip(self, client), fields(pdsc = self.name))]
     pub async fn fetch(&self, client: &Client) -> CacheResult {
         let url = self.atpack_url();
         info!(url = url.as_str(), "Getting pack ...");

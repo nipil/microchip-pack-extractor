@@ -7,6 +7,7 @@ use crate::cache::CacheResult;
 
 const PACKAGE_CONTENT: &str = "package.content";
 
+#[instrument(skip(cache), fields(cache = cache.file_name))]
 pub async fn process_cache_result(cache: CacheResult) {
     // processing the zip will be long
     // spawn a sync thread
