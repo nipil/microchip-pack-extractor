@@ -1,6 +1,6 @@
-use log::{info, trace, warn};
 use serde::Deserialize;
 use std::io::{Cursor, Read};
+use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use zip::ZipArchive;
 
 use crate::cache::CacheResult;
@@ -22,11 +22,14 @@ pub async fn process_cache_result(cache: CacheResult) {
 }
 
 fn proces_zip(content: &[u8], zip_name: &str) {
-    info!(name=zip_name; "Processing pack ... ");
+    info!(name = zip_name, "Processing pack ... ");
     let content = Cursor::new(content);
     let mut zip = ZipArchive::new(content).expect("Atpack must be a valid zip file");
     let Ok(mut package_file) = zip.by_name(PACKAGE_CONTENT) else {
-        warn!(zip=zip_name; "Skipping zip because no package content was found");
+        warn!(
+            zip = zip_name,
+            "Skipping zip because no package content was found"
+        );
         return;
     };
 
@@ -36,11 +39,11 @@ fn proces_zip(content: &[u8], zip_name: &str) {
         .expect("Must be able to read package content");
     drop(package_file);
 
-    info!(zip=zip_name; "Parsing package content...");
+    info!(zip = zip_name, "Parsing package content...");
     let package_content =
         str::from_utf8(&package_content).expect("Package content should be valid utf-8 text");
     PackageContent::new(zip_name, &mut zip, package_content).process();
-    info!(name=zip_name; "Finished pack");
+    info!(name = zip_name, "Finished pack");
 }
 
 struct PackageContent<'a, T> {

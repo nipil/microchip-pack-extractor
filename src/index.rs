@@ -1,6 +1,6 @@
-use log::{debug, info};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tracing::{Level, debug, error, event, info, instrument, span, warn};
 use url::Url;
 
 use crate::cache;
@@ -15,6 +15,7 @@ pub struct Idx {
 }
 
 impl Idx {
+    #[instrument(skip(client))]
     pub async fn get(client: &Client) -> Self {
         let cache = cache::get_cached_url_content_by_etag(client, INDEX_URL).await;
         // i had to move cache.content into the function, because as a reference it is moved
@@ -25,10 +26,11 @@ impl Idx {
         debug!("Re-serializing to discard unused stuff...");
         let content = serde_xml_rs::to_string(&index).expect("Index XML must serialize");
         cache::save_to_cache_file(&cache.cache_file, content.as_str().as_bytes()).await;
-        debug!(size=index.pdscs.len(); "Index size");
+        debug!(size = index.pdscs.len(), "Index size");
         index
     }
 
+    #[instrument(skip(content))]
     async fn parse(content: Vec<u8>) -> Self {
         info!("Parsing Index...");
         let (send, recv) = tokio::sync::oneshot::channel();
@@ -80,7 +82,7 @@ impl Pdsc {
 
     pub async fn fetch(&self, client: &Client) -> CacheResult {
         let url = self.atpack_url();
-        info!(url=url.as_str(); "Getting pack ...");
+        info!(url = url.as_str(), "Getting pack ...");
         cache::get_cached_url_content_by_etag(&client, url.as_str()).await
     }
 }

@@ -1,9 +1,9 @@
-use log::{debug, trace};
 use quoted_string::strip_dquotes;
 use reqwest::{Client, Response};
+use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 
 pub async fn head_url(client: &Client, url: &str) -> Response {
-    debug!(url=url; "Fetching headers");
+    debug!(url = url, "Fetching headers");
     client
         .head(url)
         .send()
@@ -14,7 +14,7 @@ pub async fn head_url(client: &Client, url: &str) -> Response {
 }
 
 pub async fn get_url(client: &Client, url: &str) -> Response {
-    debug!(url=url; "Fetching content");
+    debug!(url = url, "Fetching content");
     client
         .get(url)
         .send()
@@ -31,6 +31,6 @@ pub fn get_etag_from_response(res: &Response) -> &str {
         .expect("Headers must contain an ETag")
         .to_str()
         .expect("ETag must be convertible to string");
-    trace!(etag=etag; "Found ETag in headers");
+    trace!(etag = etag, "Found ETag in headers");
     strip_dquotes(etag).expect("Etag must be quoted")
 }

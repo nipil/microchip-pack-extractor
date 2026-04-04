@@ -1,8 +1,8 @@
-use log::debug;
 use reqwest::Client;
 use std::env::current_dir;
 use std::path::PathBuf;
 use tokio::fs;
+use tracing::{Level, debug, error, info, instrument, span, warn};
 use url::Url;
 
 use crate::web;
@@ -17,7 +17,10 @@ fn get_cache_dir() -> PathBuf {
 
 pub async fn ensure_cache_folder_exists() {
     let cache_dir = get_cache_dir();
-    debug!(cache=cache_dir.as_path().to_string_lossy().as_ref(); "Ensuring cache folder exists");
+    debug!(
+        cache = cache_dir.as_path().to_string_lossy().as_ref(),
+        "Ensuring cache folder exists"
+    );
     fs::DirBuilder::new()
         .recursive(true)
         .create(cache_dir)
@@ -80,12 +83,16 @@ async fn maybe_load_from_cache_file(cache_file: &str) -> Option<Vec<u8>> {
     let mut cache = get_cache_dir();
     cache.push(&cache_file);
     let cache_str = cache.to_string_lossy();
-    debug!(cache=cache_str.as_ref(); "Cache candidate");
+    debug!(cache = cache_str.as_ref(), "Cache candidate");
     if let Ok(content) = fs::read(&cache).await {
-        debug!(cache=cache_str.as_ref(), size=content.len(); "Reading cache");
+        debug!(
+            cache = cache_str.as_ref(),
+            size = content.len(),
+            "Reading cache"
+        );
         return Some(content);
     }
-    debug!(cache=cache_str.as_ref(); "No cache available");
+    debug!(cache = cache_str.as_ref(), "No cache available");
     None
 }
 
@@ -93,7 +100,11 @@ pub async fn save_to_cache_file(cache_file: &str, content: &[u8]) {
     let mut cache = get_cache_dir();
     cache.push(&cache_file);
     let cache_str = cache.to_string_lossy();
-    debug!(cache=cache_str.as_ref(), size=content.len(); "Writing cache");
+    debug!(
+        cache = cache_str.as_ref(),
+        size = content.len(),
+        "Writing cache"
+    );
     fs::write(&cache, content)
         .await
         .expect("Writing to cache must not fail");
