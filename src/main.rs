@@ -1,19 +1,20 @@
 use futures::{StreamExt, stream};
 use reqwest::Client;
-use tracing::instrument;
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 mod cache;
 mod index;
 mod package;
 mod web;
 
-#[instrument]
 #[tokio::main]
 async fn main() {
-    // construct a subscriber that prints formatted traces to stdout
-    let subscriber = tracing_subscriber::FmtSubscriber::new();
-    // use that subscriber to process traces emitted after this point
-    tracing::subscriber::set_global_default(subscriber).expect("Tracing subscriber must not fail");
+    tracing_subscriber::registry()
+        .with(
+            fmt::layer(), /* .with_span_events(fmt::format::FmtSpan::CLOSE) // prints duration on span exit */
+        )
+        .with(EnvFilter::from_default_env())
+        .init();
 
     // Prepare resources for dependency injection
     cache::ensure_cache_folder_exists().await;
