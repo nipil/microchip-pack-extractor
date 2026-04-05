@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::io::{Cursor, Read};
-use tracing::{info, instrument, trace_span, warn};
+use tracing::{debug, error, info, instrument, trace_span, warn};
 use zip::ZipArchive;
 
 const PACKAGE_CONTENT: &str = "package.content";
@@ -17,7 +17,7 @@ impl PdscArchive {
         Self { name, zip_archive }
     }
 
-    pub fn get_file_content(&mut self, file_name: &str) -> Option<Vec<u8>> {
+    fn get_file_content(&mut self, file_name: &str) -> Option<Vec<u8>> {
         let _span =
             trace_span!("Reading file from zip", file = file_name, zip = self.name).entered();
         // find file in zip archive
@@ -42,7 +42,7 @@ impl PdscArchive {
         Some(package_content)
     }
 
-    pub fn get_package_content(&mut self) -> Option<Package> {
+    fn get_package_content(&mut self) -> Option<Package> {
         let Some(content) = self.get_file_content(PACKAGE_CONTENT) else {
             return None;
         };
@@ -59,7 +59,7 @@ impl PdscArchive {
             let Some(package) = archive.get_package_content() else {
                 return;
             };
-            // FIXME: do something with package
+            package.process();
             send.send(()).unwrap_or_else(|_| panic!("Receiver dropped"));
             info!(name = archive.name, "Finished pack");
         });
@@ -70,6 +70,28 @@ impl PdscArchive {
 #[derive(Deserialize, Debug)]
 pub struct Package {
     content: Content,
+}
+
+impl Package {
+    fn process(&self) {
+        for resources in &self.content.resources {
+            for resource in &resources.resources {
+                if resource.type_ != "pic" {
+                    continue;
+                }
+                for meta in &resource.meta {
+                    // TODO: check if it is really useful
+                    error!(key = meta.key, value = meta.value, "meta");
+                }
+                for includes in &resource.includes {
+                    debug!(
+                        "target {} / subdir {} / pattern {}",
+                        resources.target, resource.subdir, includes.pattern
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
