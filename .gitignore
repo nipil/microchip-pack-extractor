@@ -29,5 +29,5 @@ extracted/
 cached/
 
 # Application tracing
-tracing.folded
-flame*.svg
+*.folded
+*.svg
