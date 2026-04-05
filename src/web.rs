@@ -1,9 +1,10 @@
 use quoted_string::strip_dquotes;
 use reqwest::{Client, Response};
-use tracing::{Level, debug, error, info, instrument, span, trace, warn};
+use tracing::{debug, trace, trace_span};
 
 pub async fn head_url(client: &Client, url: &str) -> Response {
     debug!(url = url, "Fetching headers");
+    let _span = trace_span!("Fetching headers", url).entered();
     client
         .head(url)
         .send()
@@ -15,6 +16,7 @@ pub async fn head_url(client: &Client, url: &str) -> Response {
 
 pub async fn get_url(client: &Client, url: &str) -> Response {
     debug!(url = url, "Fetching content");
+    let _span = trace_span!("Fetching content", url).entered();
     client
         .get(url)
         .send()

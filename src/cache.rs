@@ -1,111 +1,137 @@
+use crate::web;
+use hex::encode;
 use reqwest::Client;
+use sha2::{Digest, Sha256};
 use std::env::current_dir;
 use std::path::PathBuf;
 use tokio::fs;
-use tracing::{Level, debug, error, info, instrument, span, warn};
-use url::Url;
+use tokio::io;
+use tracing::{debug, trace_span};
 
-use crate::web;
+/* CACHE DIR *******************************************************************************/
 
-const CACHE_DIR: &str = "cache";
+const DEFAULT_CACHE_DIR_SUBFOLDER: &str = "cache";
 
-fn get_cache_dir() -> PathBuf {
-    let mut p = current_dir().expect("Must be able to detect current directory");
-    p.push(CACHE_DIR);
-    p
+pub struct CacheDir {
+    base_dir: PathBuf,
 }
 
-pub async fn ensure_cache_folder_exists() {
-    let cache_dir = get_cache_dir();
-    debug!(
-        cache = cache_dir.as_path().to_string_lossy().as_ref(),
-        "Ensuring cache folder exists"
-    );
-    fs::DirBuilder::new()
-        .recursive(true)
-        .create(cache_dir)
-        .await
-        .expect("Cache directory should exist");
-}
+impl CacheDir {
+    fn key_hash(key: &str) -> String {
+        encode(Sha256::digest(key))
+    }
 
-pub struct CacheResult {
-    pub file_name: String,
-    pub cache_file: String,
-    pub content: Vec<u8>,
-}
-
-fn get_cache_file(file_name: &str, etag: &str) -> String {
-    format!("{etag}.{file_name}")
-}
-
-pub async fn get_cached_url_content_by_etag(client: &Client, url: &str) -> CacheResult {
-    let url = Url::parse(url).expect("Must provide a valid url");
-    let file_name = url
-        .path_segments()
-        .expect("Url must have a path")
-        .last()
-        .expect("Url must hold a filename")
-        .to_string();
-
-    // detect newest version using ETag
-    let res = web::head_url(client, url.as_str()).await;
-
-    // get from cache if it exists
-    let cache_file = get_cache_file(&file_name, web::get_etag_from_response(&res));
-    if let Some(content) = maybe_load_from_cache_file(&cache_file).await {
-        return CacheResult {
-            file_name,
-            cache_file,
-            content,
+    pub async fn new(base_dir: Option<PathBuf>) -> Self {
+        let cache_dir = match base_dir {
+            None => {
+                let mut base_dir = current_dir().expect("Must be able to detect current directory");
+                base_dir.push(DEFAULT_CACHE_DIR_SUBFOLDER);
+                Self { base_dir }
+            }
+            Some(base_dir) => Self { base_dir },
         };
+        cache_dir.ensure_cache_folder_exists().await;
+        cache_dir
     }
 
-    // TOC/TOU: ETag might changed inbetween requests
-    drop(cache_file);
-
-    // get latest content
-    let res = web::get_url(client, url.as_str()).await;
-    let cache_file = get_cache_file(&file_name, web::get_etag_from_response(&res));
-    let content = res.bytes().await.expect("Url must have content");
-    let content = Vec::from(content);
-
-    // save content to cache
-    save_to_cache_file(&cache_file, &content).await;
-
-    CacheResult {
-        file_name,
-        cache_file,
-        content,
-    }
-}
-
-async fn maybe_load_from_cache_file(cache_file: &str) -> Option<Vec<u8>> {
-    let mut cache = get_cache_dir();
-    cache.push(&cache_file);
-    let cache_str = cache.to_string_lossy();
-    debug!(cache = cache_str.as_ref(), "Cache candidate");
-    if let Ok(content) = fs::read(&cache).await {
+    async fn ensure_cache_folder_exists(&self) {
         debug!(
-            cache = cache_str.as_ref(),
-            size = content.len(),
-            "Reading cache"
+            cache = self.base_dir.as_path().to_string_lossy().as_ref(),
+            "Ensuring cache folder exists"
         );
-        return Some(content);
+        fs::DirBuilder::new()
+            .recursive(true)
+            .create(&self.base_dir)
+            .await
+            .expect("Cache directory should exist");
     }
-    debug!(cache = cache_str.as_ref(), "No cache available");
-    None
+
+    fn cache_path_for(&self, key: &str) -> PathBuf {
+        let mut cache_path = self.base_dir.clone();
+        cache_path.push(&key);
+        cache_path
+    }
+
+    pub async fn get(&self, key: &str) -> Option<Vec<u8>> {
+        let key = Self::key_hash(key);
+        let cache_path = self.cache_path_for(&key);
+        let cache_str = cache_path.to_string_lossy();
+        let cache_str = cache_str.as_ref();
+
+        let span = trace_span!("Reading from cache dir", cache = cache_str).entered();
+        let res = fs::read(&cache_path).await;
+        drop(span);
+
+        match res {
+            Ok(content) => {
+                debug!(cache = cache_str, size = content.len(), "Reading cache");
+                return Some(content);
+            }
+            Err(e) => match e.kind() {
+                io::ErrorKind::NotFound => {
+                    debug!(cache = cache_str, "No cache available");
+                    None
+                }
+                _ => panic!(
+                    "Reading an existing cached entry from disk must not fail: {} for {}",
+                    e, cache_str
+                ),
+            },
+        }
+    }
+
+    pub async fn put(&self, key: &str, value: &[u8]) {
+        let key = Self::key_hash(key);
+        let cache_path = self.cache_path_for(&key);
+        let cache_str = cache_path.to_string_lossy();
+        let cache_str = cache_str.as_ref();
+        let span = trace_span!(
+            "Writing to cache dir",
+            cache = cache_str,
+            size = value.len()
+        )
+        .entered();
+        let s = fs::write(&cache_path, value).await;
+        let _s = s.expect("Writing to cache must not fail");
+        drop(span);
+    }
 }
 
-pub async fn save_to_cache_file(cache_file: &str, content: &[u8]) {
-    let mut cache = get_cache_dir();
-    cache.push(&cache_file);
-    let cache_str = cache.to_string_lossy();
-    debug!(
-        cache = cache_str.as_ref(),
-        size = content.len(),
-        "Writing cache"
-    );
-    fs::write(&cache, content)
-        .await
-        .expect("Writing to cache must not fail");
+/* ETAG WEB CACHE *******************************************************************************/
+
+pub struct EtagWebCache<'a> {
+    client: &'a Client,
+    cache_dir: &'a CacheDir,
+}
+
+impl<'a> EtagWebCache<'a> {
+    pub fn new(client: &'a Client, cache_dir: &'a CacheDir) -> Self {
+        Self { client, cache_dir }
+    }
+
+    fn web_key(url: &str, etag: &str) -> String {
+        format!("{url}|{etag}")
+    }
+
+    pub async fn get(&self, url: &str) -> (Vec<u8>, String) {
+        // lookup local cache after fetching etag from remote site using head
+        let res = web::head_url(self.client, url).await;
+        let etag = web::get_etag_from_response(&res).to_string();
+        let cache = self.cache_dir.get(&Self::web_key(url, &etag)).await;
+        // cache hit
+        if let Some(value) = cache {
+            return (value, etag);
+        }
+        // cache miss : get latest content using get and cache its content using the latest etag
+        let res = web::get_url(self.client, url).await;
+        let etag = web::get_etag_from_response(&res).to_string();
+        let value = Vec::from(res.bytes().await.expect("Url must have content"));
+        self.cache_dir.put(&Self::web_key(url, &etag), &value).await;
+        (value, etag)
+    }
+
+    pub async fn put(&self, url: &str, etag: &str, value: &[u8]) {
+        let key = Self::web_key(url, etag);
+        self.cache_dir.put(&key, value).await;
+    }
 }

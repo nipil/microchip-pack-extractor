@@ -1,20 +1,18 @@
 use serde::Deserialize;
 use std::io::{Cursor, Read};
-use tracing::{Level, debug, error, info, instrument, span, trace, warn};
+use tracing::{debug, info, instrument, trace_span, warn};
 use zip::ZipArchive;
-
-use crate::cache::CacheResult;
 
 const PACKAGE_CONTENT: &str = "package.content";
 
-#[instrument(skip(cache), fields(cache = cache.file_name))]
-pub async fn process_cache_result(cache: CacheResult) {
+#[instrument(skip(content))]
+pub async fn process_atpack(content: Vec<u8>, name: String) {
     // processing the zip will be long
     // spawn a sync thread
     // and wait for completion through async channel
     let (send, recv) = tokio::sync::oneshot::channel();
     rayon::spawn(move || {
-        proces_zip(&cache.content, &cache.file_name);
+        proces_zip(&content, &name);
         send.send(())
             .unwrap_or_else(|_| panic!("Receiver dropped in Idx::parse"));
     });
@@ -23,27 +21,51 @@ pub async fn process_cache_result(cache: CacheResult) {
 }
 
 fn proces_zip(content: &[u8], zip_name: &str) {
-    info!(name = zip_name, "Processing pack ... ");
+    info!(zip = zip_name, size = content.len(), "Processing pack ... ");
     let content = Cursor::new(content);
     let mut zip = ZipArchive::new(content).expect("Atpack must be a valid zip file");
+
+    let span = trace_span!(
+        "Reading file from zip",
+        file = PACKAGE_CONTENT,
+        zip = zip_name
+    );
     let Ok(mut package_file) = zip.by_name(PACKAGE_CONTENT) else {
         warn!(
             zip = zip_name,
-            "Skipping zip because no package content was found"
+            "File '{}' was not found, skipping zip", PACKAGE_CONTENT
         );
         return;
     };
-
-    let mut package_content: Vec<u8> = Vec::new();
+    let mut package_content: Vec<u8> = Vec::with_capacity(
+        usize::try_from(package_file.size())
+            .expect("Uncompressed file size must fit in cpu architecture"),
+    );
     package_file
         .read_to_end(&mut package_content)
         .expect("Must be able to read package content");
+    drop(span);
     drop(package_file);
 
-    info!(zip = zip_name, "Parsing package content...");
+    debug!(zip = zip_name, "Parsing package content...");
     let package_content =
         str::from_utf8(&package_content).expect("Package content should be valid utf-8 text");
-    PackageContent::new(zip_name, &mut zip, package_content).process();
+    let span = trace_span!(
+        "Parsing package content",
+        file = PACKAGE_CONTENT,
+        zip = zip_name
+    );
+    let package = PackageContent::new(zip_name, &mut zip, package_content);
+    drop(span);
+
+    let span = trace_span!(
+        "Processing package content",
+        file = PACKAGE_CONTENT,
+        zip = zip_name
+    );
+    package.process();
+    drop(span);
+
     info!(name = zip_name, "Finished pack");
 }
 
@@ -63,7 +85,7 @@ impl<'a, T> PackageContent<'a, T> {
     }
 
     fn process(&self) {
-        trace!("Package{:?}", self.package);
+        // trace!("Package{:?}", self.package);
     }
 }
 

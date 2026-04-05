@@ -1,10 +1,8 @@
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{Level, debug, error, event, info, instrument, span, warn};
+use tracing::{debug, info, trace_span};
 use url::Url;
 
-use crate::cache;
-use crate::cache::CacheResult;
+use crate::cache::EtagWebCache;
 
 const INDEX_URL: &str = "https://packs.download.microchip.com/index.idx";
 
@@ -15,18 +13,15 @@ pub struct Idx {
 }
 
 impl Idx {
-    #[instrument(skip(client))]
-    pub async fn get(client: &Client) -> Self {
-        let cache = cache::get_cached_url_content_by_etag(client, INDEX_URL).await;
-        // i had to move cache.content into the function, because as a reference it is moved
-        // into a thread and while in thread, it must outlive the current and calling function
-        // because the await "yields" and thus reference must outlive 'static
-        // and i do not know how to do that :-|
-        let index = Self::parse(cache.content).await;
+    pub async fn fetch(cache: &EtagWebCache<'_>) -> Self {
+        let (content, etag) = cache.get(INDEX_URL).await;
+        let index = Self::parse(content).await;
         debug!("Re-serializing to discard unused stuff...");
         let content = serde_xml_rs::to_string(&index).expect("Index XML must serialize");
-        cache::save_to_cache_file(&cache.cache_file, content.as_str().as_bytes()).await;
-        debug!(size = index.pdscs.len(), "Index size");
+        cache
+            .put(INDEX_URL, &etag, content.as_str().as_bytes())
+            .await;
+        info!(size = index.pdscs.len(), "Pdsc in Index");
         index
     }
 
@@ -38,7 +33,9 @@ impl Idx {
         // waiting is done through the channel
         rayon::spawn(move || {
             let content = str::from_utf8(&content).expect("Index should be valid utf-8 text");
+            let span = trace_span!("Parsing index").entered();
             let idx = serde_xml_rs::from_str(&content).expect("Index XML must deserialize");
+            drop(span);
             send.send(idx)
                 .unwrap_or_else(|_| panic!("Receiver dropped in Idx::parse"));
         });
@@ -61,7 +58,7 @@ pub struct Pdsc {
     #[serde(rename = "@url")]
     fqdn: String,
     #[serde(rename = "@name")]
-    name: String,
+    pub name: String,
     #[serde(rename = "@version")]
     version: String,
 }
@@ -79,10 +76,10 @@ impl Pdsc {
         Url::parse(url.as_str()).expect("Must be a valid url")
     }
 
-    #[instrument(skip(self, client), fields(pdsc = self.name))]
-    pub async fn fetch(&self, client: &Client) -> CacheResult {
+    pub async fn fetch(&self, cache: &EtagWebCache<'_>) -> (Vec<u8>, String) {
         let url = self.atpack_url();
         info!(url = url.as_str(), "Getting pack ...");
-        cache::get_cached_url_content_by_etag(&client, url.as_str()).await
+        let (content, _) = cache.get(url.as_str()).await;
+        (content, self.name.clone())
     }
 }
