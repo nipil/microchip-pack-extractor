@@ -19,11 +19,16 @@
 	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
 	"mounts": [
 		{
+			"source": "devcontainer-app-cache-${devcontainerId}",
+			"target": "${containerWorkspaceFolder}/cache",
+			"type": "volume"
+		},
+		{
 			"source": "devcontainer-cargo-cache-${devcontainerId}",
 			"target": "/usr/local/cargo",
 			"type": "volume"
 		}
-	]
+	],
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
@@ -32,7 +37,7 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "rustc --version",
+	"postCreateCommand": "sudo chown -R vscode: ${containerWorkspaceFolder}/cache"
 
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "root"
