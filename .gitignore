@@ -27,6 +27,7 @@ target
 cache/
 extracted/
 cached/
+package.content
 
 # Application tracing
 *.folded

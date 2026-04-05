@@ -35,8 +35,10 @@ async fn main() {
         // process them in whichever order they finish first
         .buffer_unordered(num_cpus::get_physical())
         // then feed them to a new task
-        .for_each(|(content, name)| async move {
-             package::process_atpack(content, name).await })
+        .for_each(|archive| async move {
+            // use associated function because we move it to a rayon thread
+            package::PdscArchive::process(archive).await;
+        })
         // wait for all tasks to complete
         .await;
 }

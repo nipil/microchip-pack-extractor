@@ -3,6 +3,7 @@ use tracing::{debug, info, trace_span};
 use url::Url;
 
 use crate::cache::EtagWebCache;
+use crate::package::PdscArchive;
 
 const INDEX_URL: &str = "https://packs.download.microchip.com/index.idx";
 
@@ -76,10 +77,10 @@ impl Pdsc {
         Url::parse(url.as_str()).expect("Must be a valid url")
     }
 
-    pub async fn fetch(&self, cache: &EtagWebCache<'_>) -> (Vec<u8>, String) {
+    pub async fn fetch(&self, cache: &EtagWebCache<'_>) -> PdscArchive {
         let url = self.atpack_url();
         info!(url = url.as_str(), "Getting pack ...");
         let (content, _) = cache.get(url.as_str()).await;
-        (content, self.name.clone())
+        PdscArchive::new(self.name.clone(), content)
     }
 }
