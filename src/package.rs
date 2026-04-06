@@ -1,9 +1,13 @@
 use serde::Deserialize;
-use std::io::{Cursor, Read};
-use tracing::{debug, error, info, instrument, trace_span, warn};
+use std::{
+    io::{Cursor, Read},
+    path::{Path, PathBuf},
+};
+use tracing::{debug, info, instrument, trace_span, warn};
 use zip::{ZipArchive, result::ZipError};
 
 const PACKAGE_CONTENT: &str = "package.content";
+const DESIRED_RESOURCE_TYPE: &str = "pic";
 
 pub struct PdscArchive {
     name: String,
@@ -60,7 +64,7 @@ impl PdscArchive {
         let (send, recv) = tokio::sync::oneshot::channel();
         rayon::spawn(move || {
             match archive.get_package_content() {
-                Some(package) => package.process(),
+                Some(package) => package.process(&mut archive),
                 None => {
                     warn!(
                         zip = archive.name,
@@ -81,17 +85,17 @@ pub struct Package {
 }
 
 impl Package {
-    fn process(&self) {
+    fn process(&self, mut archive: &mut PdscArchive) {
         for resources in &self.content.resources {
             for resource in &resources.resources {
-                if resource.type_ != "pic" {
+                if resource.type_ != DESIRED_RESOURCE_TYPE {
                     continue;
                 }
                 for includes in &resource.includes {
-                    debug!(
-                        "target {} / subdir {} / pattern {}",
-                        resources.target, resource.subdir, includes.pattern
-                    );
+                    let mut p = PathBuf::from(&resource.subdir);
+                    p.push(&includes.pattern);
+                    let p = p.to_str().expect("zip file name must be valid str");
+                    includes.process(&p, &mut archive);
                 }
             }
         }
@@ -105,8 +109,6 @@ struct Content {
 
 #[derive(Deserialize, Debug)]
 struct Resources {
-    #[serde(rename = "@target")]
-    target: String,
     #[serde(rename = "resource")]
     resources: Vec<Resource>,
 }
@@ -125,4 +127,15 @@ struct Resource {
 struct Includes {
     #[serde(rename = "@pattern")]
     pattern: String,
+}
+
+impl Includes {
+    fn process(&self, file_name: &str, archive: &mut PdscArchive) {
+        let content = archive.get_file_content(file_name).expect(&format!(
+            "File {} must be in zip {}",
+            file_name, archive.name
+        ));
+        warn!("path {} size {}", file_name, content.len());
+        // TODO: parse
+    }
 }
