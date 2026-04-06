@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::io::{Cursor, Read};
 use tracing::{debug, error, info, instrument, trace_span, warn};
-use zip::ZipArchive;
+use zip::{ZipArchive, result::ZipError};
 
 const PACKAGE_CONTENT: &str = "package.content";
 
@@ -24,10 +24,13 @@ impl PdscArchive {
         let mut zip_file = match self.zip_archive.by_name(file_name) {
             Ok(zip_file) => zip_file,
             Err(e) => {
-                warn!(
-                    zip = self.name,
-                    "Skipping '{}' due to error {}", file_name, e
-                );
+                if let ZipError::FileNotFound = e {
+                    debug!(
+                        zip = self.name,
+                        file = file_name,
+                        "File not found in archive"
+                    );
+                }
                 return None;
             }
         };
@@ -56,8 +59,14 @@ impl PdscArchive {
     pub async fn process(mut archive: Self) {
         let (send, recv) = tokio::sync::oneshot::channel();
         rayon::spawn(move || {
-            if let Some(package) = archive.get_package_content() {
-                package.process();
+            match archive.get_package_content() {
+                Some(package) => package.process(),
+                None => {
+                    warn!(
+                        zip = archive.name,
+                        "Skipping archive without {}", PACKAGE_CONTENT
+                    );
+                }
             };
             send.send(()).unwrap_or_else(|_| panic!("Receiver dropped"));
             info!(name = archive.name, "Finished pack");
