@@ -87,10 +87,6 @@ impl Package {
                 if resource.type_ != "pic" {
                     continue;
                 }
-                for meta in &resource.meta {
-                    // TODO: check if it is really useful
-                    error!(key = meta.key, value = meta.value, "meta");
-                }
                 for includes in &resource.includes {
                     debug!(
                         "target {} / subdir {} / pattern {}",
@@ -123,20 +119,10 @@ struct Resource {
     subdir: String,
     #[serde(default, rename = "includes")]
     includes: Vec<Includes>,
-    #[serde(default, rename = "meta")]
-    meta: Vec<Meta>,
 }
 
 #[derive(Deserialize, Debug)]
 struct Includes {
     #[serde(rename = "@pattern")]
     pattern: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct Meta {
-    #[serde(rename = "@key")]
-    key: String,
-    #[serde(rename = "@value")]
-    value: String,
 }
