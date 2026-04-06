@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 
 """
-CLAUDE PROMPT:
-
+PROMPT:
 build me a python script which shows the aggregated possible xml structure of a bunch of xml sample files
 * takes a list of xml files as arguments
 * parses them using a sax parser for speed
+* use startElementNS to keep all namespaces
 * removes attribute contents, keep only attribute names
 * removes all inner text, keeping only the xml elements
 * add a specific attribute named __multiple__ to elements which are repeated, so we can differenciate from non-repeating elements
 * cumulatively merges the elements of each file
 * pretty prints the results to stdout for later analysis
+* handle the namespaces elements and attributes according to namespace url, not only prefix name
 
 Usage:
     python xml_structure.py file1.xml file2.xml [...]
@@ -24,15 +25,12 @@ from collections import OrderedDict
 
 
 class StructureNode:
-    """Represents a single element in the aggregated XML structure tree."""
-
     def __init__(self, tag: str):
         self.tag = tag
         self.attrs: set[str] = set()
         self.children: OrderedDict[str, "StructureNode"] = OrderedDict()
 
     def merge(self, other: "StructureNode") -> None:
-        """Merge another StructureNode into this one (union of attrs and children)."""
         self.attrs |= other.attrs
         for name, child in other.children.items():
             if name in self.children:
@@ -42,10 +40,16 @@ class StructureNode:
 
     def pretty_print(self, indent: int = 0) -> None:
         pad = "  " * indent
+
         regular = sorted(a for a in self.attrs if a != "__multiple__")
         special = ["__multiple__"] if "__multiple__" in self.attrs else []
         all_attrs = regular + special
-        attr_str = (" " + " ".join(f'{a}=""' for a in all_attrs)) if all_attrs else ""
+
+        def fmt(a: str) -> str:
+            return a if "=" in a else f'{a}=""'
+
+        attr_str = (" " + " ".join(fmt(a) for a in all_attrs)) if all_attrs else ""
+
         if self.children:
             print(f"{pad}<{self.tag}{attr_str}>")
             for child in self.children.values():
@@ -56,49 +60,108 @@ class StructureNode:
 
 
 class StructureHandler(xml.sax.handler.ContentHandler):
-    """SAX handler that builds a StructureNode tree from an XML file."""
-
     def __init__(self):
+        super().__init__()
         self.stack: list[StructureNode] = []
         self.root: StructureNode | None = None
 
-    def startElement(self, name: str, attrs: xml.sax.xmlreader.AttributesImpl) -> None:
-        node = StructureNode(name)
-        node.attrs = set(attrs.getNames())
+        self._pending_ns = []
+        self.uri_to_prefix: dict[str, str] = {}
+
+    def startPrefixMapping(self, prefix, uri):
+        # normalize prefix (None → "")
+        prefix = prefix or ""
+
+        # register only first occurrence
+        if uri not in self.uri_to_prefix:
+            self.uri_to_prefix[uri] = prefix
+
+        self._pending_ns.append((prefix, uri))
+
+    def resolve_qname(self, uri, local, qname):
+        if qname:
+            return qname
+
+        if uri in self.uri_to_prefix:
+            prefix = self.uri_to_prefix[uri]
+            if prefix:
+                return f"{prefix}:{local}"
+            else:
+                return local
+
+        # unknown namespace → drop prefix
+        return local
+
+    def startElementNS(self, name, qname, attrs):
+        uri, local = name
+
+        tag = self.resolve_qname(uri, local, qname)
+        node = StructureNode(tag)
+
+        node.attrs = set()
+
+        # --- namespaces ---
+        for prefix, uri in self._pending_ns:
+            if prefix:
+                node.attrs.add(f'xmlns:{prefix}="{uri}"')
+            else:
+                node.attrs.add(f'xmlns="{uri}"')
+        self._pending_ns = []
+
+        # --- attributes ---
+        for (attr_uri, attr_local), value in attrs.items():
+            attr_qname = attrs.getQNameByName((attr_uri, attr_local))
+            attr_name = self.resolve_qname(attr_uri, attr_local, attr_qname)
+
+            # skip xmlns (already handled)
+            if attr_name.startswith("xmlns"):
+                continue
+
+            # ❗ critical fix: skip bogus None prefix
+            if attr_name.startswith("None:"):
+                continue
+
+            node.attrs.add(attr_name)
+
+        # --- tree ---
         if self.stack:
             parent = self.stack[-1]
-            if name in parent.children:
-                # Merge attrs seen in repeated elements at this level
-                existing = parent.children[name]
+
+            if tag in parent.children:
+                existing = parent.children[tag]
                 existing.attrs |= node.attrs
-                existing.attrs.add("__multiple__")   # mark as repeating
-                # Push the existing node so children are also merged
+                existing.attrs.add("__multiple__")
                 self.stack.append(existing)
             else:
-                parent.children[name] = node
+                parent.children[tag] = node
                 self.stack.append(node)
         else:
             self.stack.append(node)
             self.root = node
 
-    def endElement(self, name: str) -> None:
+    def endElementNS(self, name, qname):
         self.stack.pop()
 
-    # Ignore all character data
-    def characters(self, content: str) -> None:
+    def characters(self, content: str):
         pass
 
 
 def parse_file(path: str) -> StructureNode | None:
     handler = StructureHandler()
+
+    parser = xml.sax.make_parser()
+    parser.setFeature(xml.sax.handler.feature_namespaces, True)
+    parser.setContentHandler(handler)
+
     try:
-        xml.sax.parse(path, handler)
+        parser.parse(path)
     except xml.sax.SAXParseException as e:
         print(f"[warning] Skipping {path}: {e}", file=sys.stderr)
         return None
     except OSError as e:
         print(f"[warning] Cannot open {path}: {e}", file=sys.stderr)
         return None
+
     return handler.root
 
 
@@ -123,26 +186,17 @@ def main() -> None:
         tree = parse_file(path)
         if tree is None:
             continue
+
         if aggregated is None:
             aggregated = tree
-        elif aggregated.tag == tree.tag:
-            aggregated.merge(tree)
         else:
-            # Different root tags — wrap both under a synthetic <root>
-            if aggregated.tag != "__root__":
-                wrapper = StructureNode("__root__")
-                wrapper.children[aggregated.tag] = aggregated
-                aggregated = wrapper
-            if tree.tag in aggregated.children:
-                aggregated.children[tree.tag].merge(tree)
-            else:
-                aggregated.children[tree.tag] = tree
+            aggregated.merge(tree)
 
     if aggregated is None:
         print("No valid XML files parsed.", file=sys.stderr)
         sys.exit(1)
 
-    print()  # blank line separating stderr progress from stdout output
+    print()
     aggregated.pretty_print()
 
 
