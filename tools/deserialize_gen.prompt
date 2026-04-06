@@ -1,0 +1,31 @@
+build me a python script that reads a sample xml file,
+and only works on its structure,
+to generate serde-xml-rs rust structs representing a proper deserializing module to load this xml.
+
+key points are :
+- get the xml from a file on command line
+- produce the rust code on stdout
+- for each element, build a struct
+- for each attribute, previx the serde rename name with @
+- elements which have the __multiple__ attribute can be found many times in their parent, and will be Vec
+- of course, the __multiple__ attribute is special and must not be present in the output code
+- handle xml namespaces prefix graciously
+
+some more hints
+1) do keep namespaces and prefixes, they are important for parsing
+2) when __multiple__ convert to vec, these specific vec should be marked as default in serde so they allow for no element in its parent
+3) beware of attributes and element name conflicting with reserved keywords in rust edition 2024
+4) ignore text nodes
+5) nothing is optional, neither attributes nor elements and if multiple elements appear in different shapes, then merge them
+
+again, refine
+1) you MUST keep the namespace prefix in serde renames, either attributes or elements
+2) actually make Vec when the __multiple__ attribute is present, and add Default to that member
+
+Most important : prefixes matter, so choose the right library and produce a clean,
+production version that fully preserves namespace prefixes
+
+Detect multiplicity purely from presence
+
+NEVER lose it during merging
+

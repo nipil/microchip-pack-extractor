@@ -1,0 +1,10 @@
+build me a python script which shows the aggregated possible xml structure of a bunch of xml sample files
+* takes a list of xml files as arguments
+* parses them using a sax parser for speed
+* use startElementNS to keep all namespaces
+* removes attribute contents, keep only attribute names
+* removes all inner text, keeping only the xml elements
+* add a specific attribute named __multiple__ to elements which are repeated, so we can differenciate from non-repeating elements
+* cumulatively merges the elements of each file
+* pretty prints the results to stdout for later analysis
+* handle the namespaces elements and attributes according to namespace url, not only prefix name
