@@ -22,7 +22,7 @@ impl Idx {
         cache
             .put(INDEX_URL, &etag, content.as_str().as_bytes())
             .await;
-        info!(size = index.pdscs.len(), "Pdsc in Index");
+        info!(pdsc = index.pdscs.len(), "Index size");
         index
     }
 
