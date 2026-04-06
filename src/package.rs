@@ -56,14 +56,13 @@ impl PdscArchive {
     pub async fn process(mut archive: Self) {
         let (send, recv) = tokio::sync::oneshot::channel();
         rayon::spawn(move || {
-            let Some(package) = archive.get_package_content() else {
-                return;
+            if let Some(package) = archive.get_package_content() {
+                package.process();
             };
-            package.process();
             send.send(()).unwrap_or_else(|_| panic!("Receiver dropped"));
             info!(name = archive.name, "Finished pack");
         });
-        recv.await.expect("Zip processing must not fail");
+        recv.await.expect("PdscArchive::process must send");
     }
 }
 
