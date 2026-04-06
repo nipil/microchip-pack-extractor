@@ -103,11 +103,19 @@ def parse_file(path: str) -> StructureNode | None:
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} file1.xml [file2.xml ...]", file=sys.stderr)
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} file_list.txt", file=sys.stderr)
         sys.exit(1)
 
-    files = sys.argv[1:]
+    list_path = sys.argv[1]
+
+    try:
+        with open(list_path, "r", encoding="utf-8") as f:
+            files = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+    except OSError as e:
+        print(f"[error] Cannot read file list {list_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
     aggregated: StructureNode | None = None
 
     for path in files:
