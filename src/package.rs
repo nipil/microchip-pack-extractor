@@ -79,7 +79,7 @@ impl PdscArchive {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 pub struct Package {
     content: Content,
 }
@@ -102,18 +102,18 @@ impl Package {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct Content {
     resources: Vec<Resources>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct Resources {
     #[serde(rename = "resource")]
     resources: Vec<Resource>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct Resource {
     #[serde(rename = "@type")]
     type_: String,
@@ -123,7 +123,7 @@ struct Resource {
     includes: Vec<Includes>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct Includes {
     #[serde(rename = "@pattern")]
     pattern: String,
