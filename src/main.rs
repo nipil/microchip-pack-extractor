@@ -6,6 +6,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 mod cache;
 mod index;
 mod package;
+mod pic;
 mod web;
 
 #[tokio::main]

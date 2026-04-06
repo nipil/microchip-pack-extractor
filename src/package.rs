@@ -136,6 +136,9 @@ impl Includes {
             file_name, archive.name
         ));
         warn!("path {} size {}", file_name, content.len());
-        // TODO: parse
+        let _span = trace_span!("Deserializing", file = file_name, zip = archive.name).entered();
+        let content = str::from_utf8(&content).expect("must be valid utf-8 text");
+        let part: crate::pic::EdcPic = serde_xml_rs::from_str(content).expect("XML must deserialize");
+        // TODO: do something with pic
     }
 }
